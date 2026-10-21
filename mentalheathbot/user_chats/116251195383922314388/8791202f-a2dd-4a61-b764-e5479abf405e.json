@@ -1,0 +1,17 @@
+{
+  "id": "8791202f-a2dd-4a61-b764-e5479abf405e",
+  "created": "2026-08-19T23:10:30.015149",
+  "title": "hi",
+  "messages": [
+    {
+      "sender": "user",
+      "text": "hi",
+      "timestamp": "2026-08-19T23:10:49.254233"
+    },
+    {
+      "sender": "bot",
+      "text": "Hi there! It's really nice to connect with you. How are you doing today, and how can I help?",
+      "timestamp": "2026-08-19T23:10:52.709014"
+    }
+  ]
+}

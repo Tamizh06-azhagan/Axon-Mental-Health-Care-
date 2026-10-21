@@ -1,0 +1,9 @@
+Flask
+faster-whisper
+numpy
+python-dotenv
+requests
+scikit-learn
+sentence-transformers
+torch
+transformers

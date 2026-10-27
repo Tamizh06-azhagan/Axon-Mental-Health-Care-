@@ -1,0 +1,27 @@
+{
+  "id": "6f0d3e46-328c-40ea-b2fb-32a598785e99",
+  "created": "2026-10-20T00:08:07.021275",
+  "title": "I feel anxious",
+  "messages": [
+    {
+      "sender": "user",
+      "text": "I feel anxious",
+      "timestamp": "2026-10-20T00:08:43.332483"
+    },
+    {
+      "sender": "bot",
+      "text": "It's okay to feel anxious sometimes, but it's important to recognize when this feeling is excessive and interfering with daily life. Techniques like deep breathing, meditation, or talking to someone about your feelings can be helpful. If these don't work, consider reaching out for support like talking to friends, family members, or professionals who specialize in mental health. Remember, seeking help is brave and necessary.",
+      "timestamp": "2026-10-20T00:08:43.332483"
+    },
+    {
+      "sender": "user",
+      "text": "give any therapy",
+      "timestamp": "2026-10-20T00:09:54.635755"
+    },
+    {
+      "sender": "bot",
+      "text": "If you're experiencing anxiety, here are some common therapies that might help:\n\n1. **Cognitive Behavioral Therapy (CBT)** - Focuses on identifying negative thought patterns and behaviors, and developing new, more positive ones.\n\n2. **Mindfulness-Based Stress Reduction (MBSR)** - Helps you become more aware of your thoughts and emotions and learn strategies to manage them better.\n\n3. **Dialectical Behavior Therapy (DBT)** - Combines techniques from CBT and mindfulness to address issues related to emotional regulation, interpersonal effectiveness, and distress tolerance.\n\n4. **Art Therapy** - Using art as a therapeutic medium can be very effective for reducing stress and anxiety.\n\n5. **Psych",
+      "timestamp": "2026-10-20T00:09:54.635755"
+    }
+  ]
+}

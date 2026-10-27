@@ -1,0 +1,27 @@
+{
+  "id": "d63f210d-6dc9-4f7d-abbc-3e5244bbb596",
+  "created": "2026-10-22T11:35:59.418027",
+  "title": "I'm feeling calm today.",
+  "messages": [
+    {
+      "sender": "user",
+      "text": "I'm feeling calm today.",
+      "timestamp": "2026-10-22T11:36:11.002676"
+    },
+    {
+      "sender": "bot",
+      "text": "Good! Let's talk about how you're feeling. What brings you peace and joy today?",
+      "timestamp": "2026-10-22T11:36:11.002676"
+    },
+    {
+      "sender": "user",
+      "text": "Quick check-in: I'm feeling stressed. It feels about 5 out of 5 in heaviness (my own rating).",
+      "timestamp": "2026-10-22T21:46:31.399357"
+    },
+    {
+      "sender": "bot",
+      "text": "Got it! Can you share more details about what causes this feeling of stress? How do you manage it now?",
+      "timestamp": "2026-10-22T21:46:31.399357"
+    }
+  ]
+}

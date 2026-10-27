@@ -90,6 +90,7 @@ app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "change-me-in-your-env-file")
 app.config["MAX_CONTENT_LENGTH"] = MAX_AUDIO_BYTES
 
+
 # -----------------------
 # Dataset & embeddings
 # -----------------------
@@ -97,24 +98,27 @@ app.config["MAX_CONTENT_LENGTH"] = MAX_AUDIO_BYTES
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
-DATASET_PATH = Path(os.getenv("DATASET_PATH", str(BASE_DIR / "mentalhealthchatbot.txt")))
+DATASET_PATH = Path(
+    os.getenv("DATASET_PATH", str(BASE_DIR / "mentalhealthchatbot.txt"))
+)
 
 with open(DATASET_PATH, "r", encoding="utf-8") as f:
-    data = json.load(f)
-
     data = json.load(f)
 
 embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
 patterns = []
-pattern_intent = []                      # index into data["intents"]
+pattern_intent = []
+
 for i, intent in enumerate(data["intents"]):
     for pattern in intent["patterns"]:
         patterns.append(pattern)
         pattern_intent.append(i)
 
 pattern_embeddings = embedder.encode(patterns)
+
 print("Mental health chatbot ready. AI responses and transcription run locally.")
+
 
 # -----------------------
 # Chat storage helpers

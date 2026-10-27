@@ -699,6 +699,7 @@ st.markdown(theme_css(THEMES[st.session_state.theme]), unsafe_allow_html=True)
 
 # Sign-in card
 if not st.user.is_logged_in:
+    st.login("google")
     _, mid, _ = st.columns([1, 4, 1])
     with mid:
         with st.container(border=True):

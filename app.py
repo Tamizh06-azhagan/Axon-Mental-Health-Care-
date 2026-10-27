@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import os
@@ -8,48 +9,34 @@ import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import urlencode
 
 import numpy as np
-import requests
+import streamlit as st
 import torch
-from dotenv import load_dotenv
 from faster_whisper import WhisperModel
-from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-# -----------------------
-# Config
-# -----------------------
-load_dotenv()
+st.set_page_config(page_title="Axon", page_icon="🧠", layout="centered")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
-GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
-GOOGLE_REDIRECT_URI = os.getenv(
-    "GOOGLE_REDIRECT_URI", "http://localhost:5000/api/auth/google/callback"
-)
+# -----------------------
+# Config
+# -----------------------
+BASE_DIR = Path(__file__).resolve().parent
+DATASET_PATH = Path(os.getenv("DATASET_PATH", BASE_DIR / "mentalhealthchatbot.txt"))
+CHATS_DIR = BASE_DIR / "user_chats"
+CHATS_DIR.mkdir(exist_ok=True)
 
 CHAT_MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
 TRANSCRIPTION_MODEL_NAME = "tiny"
-
-chat_model = None
-chat_tokenizer = None
-transcription_model = None
-chat_load_lock = threading.Lock()       # guards loading the chat model
-chat_gen_lock = threading.Lock()        # one generation at a time on CPU
-transcription_model_lock = threading.Lock()
-
 MAX_AUDIO_BYTES = 5 * 1024 * 1024
-SIMILARITY_THRESHOLD = 0.45             # below this, the dataset answer is ignored
-HISTORY_TURNS = 6                       # previous messages sent to the model
-
-CHATS_DIR = Path("user_chats")
-CHATS_DIR.mkdir(exist_ok=True)
+SIMILARITY_THRESHOLD = 0.45   # below this, the dataset answer is ignored
+HISTORY_TURNS = 6             # previous messages sent to the model
+MOODS = ["calm", "okay", "anxious", "stressed", "low", "overwhelmed", "angry", "numb"]
 
 # Immediate danger: thoughts of self-harm, or of harming someone else.
 CRISIS_PATTERNS = re.compile(
@@ -80,57 +67,57 @@ SUPPORT_NUDGE = (
 )
 FALLBACK_REPLY = "I'm here and listening. What feels most important to share right now?"
 
-# Optional, self-reported mood labels. Never scored, never inferred from text.
-MOODS = {"calm", "okay", "anxious", "stressed", "low", "overwhelmed", "angry", "numb"}
-
-# -----------------------
-# Flask App
-# -----------------------
-app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET_KEY", "change-me-in-your-env-file")
-app.config["MAX_CONTENT_LENGTH"] = MAX_AUDIO_BYTES
-
-
-# -----------------------
-# Dataset & embeddings
-# -----------------------
-
-from pathlib import Path
-
-BASE_DIR = Path(__file__).resolve().parent
-DATASET_PATH = Path(
-    os.getenv("DATASET_PATH", str(BASE_DIR / "mentalhealthchatbot.txt"))
-)
-
-with open(DATASET_PATH, "r", encoding="utf-8") as f:
-    data = json.load(f)
-
-embedder = SentenceTransformer("all-MiniLM-L6-v2")
-
-patterns = []
-pattern_intent = []
-
-for i, intent in enumerate(data["intents"]):
-    for pattern in intent["patterns"]:
-        patterns.append(pattern)
-        pattern_intent.append(i)
-
-pattern_embeddings = embedder.encode(patterns)
-
-print("Mental health chatbot ready. AI responses and transcription run locally.")
-
-
-# -----------------------
-# Chat storage helpers
-# -----------------------
 UUID_RE = re.compile(r"^[0-9a-fA-F-]{36}$")
 
 
-def valid_chat_id(chat_id):
-    return bool(chat_id) and bool(UUID_RE.match(chat_id))
+# -----------------------
+# Cached models and data
+# -----------------------
+@st.cache_resource(show_spinner="Loading the chat model (first run only)...")
+def load_chat_model():
+    tok = AutoTokenizer.from_pretrained(CHAT_MODEL_NAME)
+    mdl = AutoModelForCausalLM.from_pretrained(
+        CHAT_MODEL_NAME, torch_dtype=torch.float32, low_cpu_mem_usage=True
+    )
+    mdl.eval()
+    return tok, mdl
 
 
-def user_dir_for(user_id):
+@st.cache_resource(show_spinner="Loading the knowledge base...")
+def load_knowledge_base():
+    with open(DATASET_PATH, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    embedder = SentenceTransformer("all-MiniLM-L6-v2")
+    patterns, pattern_intent = [], []
+    for i, intent in enumerate(data["intents"]):
+        for pattern in intent["patterns"]:
+            patterns.append(pattern)
+            pattern_intent.append(i)
+
+    return {
+        "data": data,
+        "embedder": embedder,
+        "pattern_intent": pattern_intent,
+        "pattern_embeddings": embedder.encode(patterns),
+    }
+
+
+@st.cache_resource(show_spinner="Loading the transcription model...")
+def load_transcriber():
+    return WhisperModel(TRANSCRIPTION_MODEL_NAME, device="cpu", compute_type="int8")
+
+
+@st.cache_resource
+def get_compute_lock():
+    # One heavy model call at a time on CPU, shared across all sessions.
+    return threading.Lock()
+
+
+# -----------------------
+# Chat storage
+# -----------------------
+def safe_user_dir(user_id):
     safe = re.sub(r"[^A-Za-z0-9_-]", "", str(user_id))
     if not safe:
         raise ValueError("Invalid user id")
@@ -140,44 +127,29 @@ def user_dir_for(user_id):
 
 
 def chat_path(user_id, chat_id):
-    if not valid_chat_id(chat_id):
+    if not UUID_RE.match(chat_id or ""):
         raise ValueError("Invalid chat id")
-    return user_dir_for(user_id) / f"{chat_id}.json"
+    return safe_user_dir(user_id) / f"{chat_id}.json"
 
 
-def create_chat_file(user_id, chat_id=None):
-    chat_id = chat_id or str(uuid.uuid4())
-    chat_data = {
+def write_chat(path, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def create_chat(user_id):
+    chat_id = str(uuid.uuid4())
+    data = {
         "id": chat_id,
         "created": datetime.now().isoformat(),
         "title": "New Chat",
         "messages": [],
     }
-    with open(chat_path(user_id, chat_id), "w", encoding="utf-8") as f:
-        json.dump(chat_data, f, indent=2)
-    return chat_data
+    write_chat(chat_path(user_id, chat_id), data)
+    return data
 
 
-def save_exchange(user_id, chat_id, user_text, bot_text):
-    """Append the user message and bot reply together, after a reply succeeded."""
-    path = chat_path(user_id, chat_id)
-    if not path.exists():
-        create_chat_file(user_id, chat_id)
-    with open(path, "r", encoding="utf-8") as f:
-        chat_data = json.load(f)
-
-    now = datetime.now().isoformat()
-    chat_data["messages"].append({"sender": "user", "text": user_text, "timestamp": now})
-    chat_data["messages"].append({"sender": "bot", "text": bot_text, "timestamp": now})
-
-    if chat_data["title"] == "New Chat":
-        chat_data["title"] = user_text[:50].rstrip() + ("..." if len(user_text) > 50 else "")
-
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(chat_data, f, indent=2)
-
-
-def get_chat_history(user_id, chat_id):
+def load_chat(user_id, chat_id):
     path = chat_path(user_id, chat_id)
     if not path.exists():
         return None
@@ -185,74 +157,87 @@ def get_chat_history(user_id, chat_id):
         return json.load(f)
 
 
+def save_exchange(user_id, chat_id, user_text, bot_text):
+    """Append the user message and bot reply together, after a reply succeeded."""
+    chat = load_chat(user_id, chat_id)
+    if chat is None:
+        raise ValueError("Chat not found")
+
+    now = datetime.now().isoformat()
+    chat["messages"].append({"sender": "user", "text": user_text, "timestamp": now})
+    chat["messages"].append({"sender": "bot", "text": bot_text, "timestamp": now})
+
+    if chat["title"] == "New Chat":
+        chat["title"] = user_text[:50].rstrip() + ("..." if len(user_text) > 50 else "")
+
+    write_chat(chat_path(user_id, chat_id), chat)
+
+
 def recent_messages(user_id, chat_id):
     """Last few messages as chat-template roles, for conversational context."""
-    try:
-        chat = get_chat_history(user_id, chat_id)
-    except Exception:
-        return []
+    chat = load_chat(user_id, chat_id)
     if not chat:
         return []
-    out = []
-    for m in chat["messages"][-HISTORY_TURNS:]:
-        out.append({"role": "user" if m["sender"] == "user" else "assistant", "content": m["text"]})
-    return out
+    return [
+        {"role": "user" if m["sender"] == "user" else "assistant", "content": m["text"]}
+        for m in chat["messages"][-HISTORY_TURNS:]
+    ]
 
 
-def list_user_chats(user_id):
+def list_chats(user_id):
+    files = sorted(
+        safe_user_dir(user_id).glob("*.json"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
     chats = []
-    for chat_file in sorted(
-        user_dir_for(user_id).glob("*.json"), key=lambda x: x.stat().st_mtime, reverse=True
-    ):
+    for p in files:
         try:
-            with open(chat_file, "r", encoding="utf-8") as f:
-                c = json.load(f)
-            chats.append({
-                "id": c["id"],
-                "title": c["title"],
-                "created": c["created"],
-                "message_count": len(c["messages"]),
-            })
+            with open(p, "r", encoding="utf-8") as f:
+                chats.append(json.load(f))
         except Exception:
-            logger.exception("Skipping unreadable chat file %s", chat_file)
+            logger.exception("Skipping unreadable chat file %s", p)
     return chats
 
 
-def delete_chat(user_id, chat_id):
-    path = chat_path(user_id, chat_id)
-    if path.exists():
-        path.unlink()
-        return True
-    return False
+def ensure_active_chat(user_id):
+    """Keep the current chat if it still exists, else reuse an empty one or create one."""
+    current = st.session_state.get("chat_id")
+    if current and load_chat(user_id, current):
+        return current
+
+    empty = next((c for c in list_chats(user_id) if not c["messages"]), None)
+    chat_id = empty["id"] if empty else create_chat(user_id)["id"]
+    st.session_state.chat_id = chat_id
+    return chat_id
+
+
+def open_chat(chat_id):
+    st.session_state.chat_id = chat_id
+
+
+def delete_chat_cb(user_id, chat_id):
+    chat_path(user_id, chat_id).unlink(missing_ok=True)
+    if st.session_state.get("chat_id") == chat_id:
+        st.session_state.pop("chat_id", None)
+
+
+def start_new_chat(user_id):
+    st.session_state.chat_id = create_chat(user_id)["id"]
+
 
 # -----------------------
 # Core chat logic
 # -----------------------
-def load_chat_model():
-    global chat_model, chat_tokenizer
-    if chat_model is not None and chat_tokenizer is not None:
-        return
-    with chat_load_lock:
-        if chat_model is None or chat_tokenizer is None:
-            logger.info("Loading local chat model: %s", CHAT_MODEL_NAME)
-            tok = AutoTokenizer.from_pretrained(CHAT_MODEL_NAME)
-            mdl = AutoModelForCausalLM.from_pretrained(
-                CHAT_MODEL_NAME, torch_dtype=torch.float32, low_cpu_mem_usage=True
-            )
-            mdl.eval()
-            chat_tokenizer, chat_model = tok, mdl
-            logger.info("Local chat model loaded.")
-
-
-def dataset_answer_for(user_message):
+def dataset_answer_for(user_message, kb):
     """Best matching dataset response, or '' if nothing is similar enough."""
     try:
-        emb = embedder.encode([user_message], convert_to_numpy=True)
-        sims = cosine_similarity(emb, pattern_embeddings)[0]
+        emb = kb["embedder"].encode([user_message], convert_to_numpy=True)
+        sims = cosine_similarity(emb, kb["pattern_embeddings"])[0]
         best = int(np.argmax(sims))
         if sims[best] < SIMILARITY_THRESHOLD:
             return ""
-        return random.choice(data["intents"][pattern_intent[best]]["responses"])
+        return random.choice(kb["data"]["intents"][kb["pattern_intent"][best]]["responses"])
     except Exception:
         logger.exception("Dataset similarity lookup failed")
         return ""
@@ -267,7 +252,7 @@ def trim_to_sentence(text):
     return text[: cut + 1].strip() if cut > 40 else text
 
 
-def generate_reply(user_message, history=None, mood=None):
+def generate_reply(user_message, history, mood, kb):
     user_message = (user_message or "").strip()
     if not user_message:
         return "Please type a message so I can help."
@@ -276,10 +261,10 @@ def generate_reply(user_message, history=None, mood=None):
         return CRISIS_REPLY
 
     needs_nudge = bool(ONGOING_PATTERNS.search(user_message))
-    dataset_answer = dataset_answer_for(user_message)
+    dataset_answer = dataset_answer_for(user_message, kb)
 
     try:
-        load_chat_model()
+        tok, model = load_chat_model()
 
         system_prompt = (
             "You are Axon, a warm, caring companion for people who want to talk about how "
@@ -306,26 +291,22 @@ def generate_reply(user_message, history=None, mood=None):
         messages.extend(history or [])
         messages.append({"role": "user", "content": user_message})
 
-        # Build the prompt as text, then tokenize: works on every transformers version
-        # (apply_chat_template(return_tensors="pt") returns a BatchEncoding on new ones).
-        prompt = chat_tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
-        inputs = chat_tokenizer(prompt, return_tensors="pt")
+        prompt = tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        inputs = tok(prompt, return_tensors="pt")
         input_len = inputs["input_ids"].shape[-1]
 
-        with chat_gen_lock, torch.inference_mode():
-            output = chat_model.generate(
+        with get_compute_lock(), torch.inference_mode():
+            output = model.generate(
                 **inputs,
                 max_new_tokens=140,
                 do_sample=True,
                 temperature=0.7,
                 top_p=0.9,
                 repetition_penalty=1.08,
-                pad_token_id=chat_tokenizer.eos_token_id,
+                pad_token_id=tok.eos_token_id,
             )
 
-        reply = chat_tokenizer.decode(output[0][input_len:], skip_special_tokens=True).strip()
+        reply = tok.decode(output[0][input_len:], skip_special_tokens=True).strip()
         reply = trim_to_sentence(reply)
         if reply:
             return reply + (SUPPORT_NUDGE if needs_nudge else "")
@@ -337,254 +318,125 @@ def generate_reply(user_message, history=None, mood=None):
     return fallback + (SUPPORT_NUDGE if needs_nudge else "")
 
 
-def transcribe_audio(audio_bytes, mime_type="audio/webm"):
-    global transcription_model
-    if transcription_model is None:
-        with transcription_model_lock:
-            if transcription_model is None:
-                transcription_model = WhisperModel(
-                    TRANSCRIPTION_MODEL_NAME, device="cpu", compute_type="int8"
+def transcribe_audio(audio_bytes):
+    model = load_transcriber()
+    with tempfile.TemporaryDirectory() as temp_dir:
+        audio_path = Path(temp_dir) / "recording.wav"
+        audio_path.write_bytes(audio_bytes)
+        with get_compute_lock():
+            segments, _ = model.transcribe(str(audio_path), beam_size=1, vad_filter=True)
+            return " ".join(s.text.strip() for s in segments).strip()
+
+
+def respond(user_id, chat_id, user_text, mood, kb):
+    with st.chat_message("user"):
+        st.write(user_text)
+
+    history = recent_messages(user_id, chat_id)
+    with st.chat_message("assistant"):
+        with st.spinner("Thinking..."):
+            reply = generate_reply(user_text, history, mood, kb)
+        st.write(reply)
+
+    try:
+        save_exchange(user_id, chat_id, user_text, reply)
+    except Exception:
+        logger.exception("Could not save the chat exchange")
+        st.error("I couldn't save this message. Please try again.")
+        return
+
+    st.rerun()  # refresh the sidebar title and history from disk
+
+
+# -----------------------
+# Auth gate (Google sign-in via Streamlit's built-in OIDC support)
+# -----------------------
+if not st.user.is_logged_in:
+    st.title("Axon")
+    st.write(
+        "A calm place to talk about how you're feeling. "
+        "Sign in with Google to keep your conversations."
+    )
+    st.button("Sign in with Google", type="primary", on_click=st.login)
+    st.caption(
+        "Axon is a conversation companion, not a replacement for a therapist, "
+        "doctor, or emergency services."
+    )
+    st.stop()
+
+# -----------------------
+# Signed-in app
+# -----------------------
+user_id = st.user.sub
+kb = load_knowledge_base()
+
+with st.sidebar:
+    st.markdown(f"**{st.user.get('name') or 'Signed in'}**")
+    if st.user.get("email"):
+        st.caption(st.user.get("email"))
+
+    st.button("New chat", on_click=start_new_chat, args=(user_id,), use_container_width=True)
+
+    st.divider()
+    st.caption("Your chats")
+    for c in list_chats(user_id):
+        col_open, col_del = st.columns([5, 1])
+        col_open.button(
+            c["title"],
+            key=f"open-{c['id']}",
+            on_click=open_chat,
+            args=(c["id"],),
+            use_container_width=True,
+        )
+        col_del.button(
+            "🗑",
+            key=f"del-{c['id']}",
+            on_click=delete_chat_cb,
+            args=(user_id, c["id"]),
+        )
+
+    st.divider()
+    st.button("Sign out", on_click=st.logout)
+
+st.title("Axon")
+
+chat_id = ensure_active_chat(user_id)
+chat = load_chat(user_id, chat_id)
+
+for m in chat["messages"]:
+    with st.chat_message("user" if m["sender"] == "user" else "assistant"):
+        st.write(m["text"])
+
+mood_choice = st.selectbox(
+    "How are you feeling? (optional, just for you)",
+    ["Not sure"] + MOODS,
+    index=0,
+)
+mood = None if mood_choice == "Not sure" else mood_choice
+
+audio = st.audio_input("Or record a voice message")
+pending_text = None
+if audio is not None:
+    audio_bytes = audio.getvalue()
+    digest = hashlib.sha256(audio_bytes).hexdigest()
+    # Streamlit reruns on every interaction, so only transcribe a recording once.
+    if digest != st.session_state.get("last_audio_digest"):
+        st.session_state.last_audio_digest = digest
+        if not audio_bytes:
+            st.warning("The recording was empty. Please try again.")
+        elif len(audio_bytes) > MAX_AUDIO_BYTES:
+            st.error("That voice message is too long. Please keep it under a minute.")
+        else:
+            with st.spinner("Listening..."):
+                transcript = transcribe_audio(audio_bytes)
+            if transcript:
+                pending_text = transcript
+            else:
+                st.warning(
+                    "I couldn't make out that recording. Try again, or type your message instead."
                 )
 
-    suffix = {
-        "audio/webm": ".webm",
-        "audio/ogg": ".ogg",
-        "audio/mp4": ".mp4",
-        "audio/mpeg": ".mp3",
-        "audio/wav": ".wav",
-    }.get(mime_type.split(";", 1)[0].lower(), ".audio")
-
-    with tempfile.TemporaryDirectory() as temp_dir:
-        audio_path = Path(temp_dir) / f"recording{suffix}"
-        audio_path.write_bytes(audio_bytes)
-        segments, _ = transcription_model.transcribe(
-            str(audio_path), beam_size=1, vad_filter=True
-        )
-        return " ".join(s.text.strip() for s in segments).strip()
-
-# -----------------------
-# Google OAuth
-# -----------------------
-@app.route("/api/auth/google")
-def google_login():
-    params = {
-        "client_id": GOOGLE_CLIENT_ID,
-        "redirect_uri": GOOGLE_REDIRECT_URI,
-        "response_type": "code",
-        "scope": "openid email profile",
-        "access_type": "offline",
-        "prompt": "select_account",
-    }
-    return redirect(f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}")
-
-
-@app.route("/api/auth/google/callback", methods=["GET"])
-def google_callback():
-    code = request.args.get("code")
-    error = request.args.get("error")
-
-    if error or not code:
-        logger.warning("OAuth failed: error=%s code_present=%s", error, bool(code))
-        return redirect(url_for("home"))
-
-    try:
-        token_response = requests.post(
-            "https://oauth2.googleapis.com/token",
-            data={
-                "code": code,
-                "client_id": GOOGLE_CLIENT_ID,
-                "client_secret": GOOGLE_CLIENT_SECRET,
-                "redirect_uri": GOOGLE_REDIRECT_URI,
-                "grant_type": "authorization_code",
-            },
-            timeout=15,
-        )
-        token_response.raise_for_status()
-        token_json = token_response.json()
-        if "access_token" not in token_json:
-            logger.warning("No access token in Google response")
-            return redirect(url_for("home"))
-
-        info_response = requests.get(
-            "https://www.googleapis.com/oauth2/v2/userinfo",
-            headers={"Authorization": f"Bearer {token_json['access_token']}"},
-            timeout=15,
-        )
-        info_response.raise_for_status()
-        info = info_response.json()
-
-        session["user"] = {
-            "id": info.get("id"),
-            "email": info.get("email"),
-            "name": info.get("name"),
-            "picture": info.get("picture"),
-        }
-        logger.info("User signed in: %s", info.get("name"))
-    except Exception:
-        logger.exception("OAuth callback error")
-
-    return redirect(url_for("home"))
-
-
-@app.route("/api/auth/status", methods=["GET"])
-def auth_status():
-    if "user" in session:
-        return jsonify({"signed_in": True, "user": session["user"]})
-    return jsonify({"signed_in": False})
-
-
-@app.route("/api/auth/logout", methods=["POST"])
-def logout():
-    session.clear()
-    return jsonify({"success": True})
-
-# -----------------------
-# Chat history routes
-# -----------------------
-def require_user():
-    return session.get("user")
-
-
-@app.route("/api/chats", methods=["GET"])
-def get_chats():
-    user = require_user()
-    if not user:
-        return jsonify({"error": "Not authenticated"}), 401
-    return jsonify({"chats": list_user_chats(user["id"])})
-
-
-@app.route("/api/chats/new", methods=["POST"])
-def new_chat():
-    user = require_user()
-    if not user:
-        return jsonify({"error": "Not authenticated"}), 401
-    return jsonify({"chat": create_chat_file(user["id"])})
-
-
-@app.route("/api/chats/<chat_id>", methods=["GET"])
-def get_chat(chat_id):
-    user = require_user()
-    if not user:
-        return jsonify({"error": "Not authenticated"}), 401
-    if not valid_chat_id(chat_id):
-        return jsonify({"error": "Invalid chat ID"}), 400
-    chat_data = get_chat_history(user["id"], chat_id)
-    if not chat_data:
-        return jsonify({"error": "Chat not found"}), 404
-    return jsonify({"chat": chat_data})
-
-
-@app.route("/api/chats/<chat_id>", methods=["DELETE"])
-def delete_chat_route(chat_id):
-    user = require_user()
-    if not user:
-        return jsonify({"error": "Not authenticated"}), 401
-    if not valid_chat_id(chat_id):
-        return jsonify({"error": "Invalid chat ID"}), 400
-    if delete_chat(user["id"], chat_id):
-        return jsonify({"success": True})
-    return jsonify({"error": "Chat not found"}), 404
-
-# -----------------------
-# Chat API
-# -----------------------
-@app.route("/api/health", methods=["GET"])
-def health():
-    return jsonify({
-        "ok": True,
-        "chat_model_loaded": chat_model is not None,
-        "transcription_model_loaded": transcription_model is not None,
-    })
-
-
-@app.route("/")
-def home():
-    return render_template("index.html")
-
-
-def error_text(exc):
-    return str(exc) or exc.__class__.__name__
-
-
-@app.route("/api/chat", methods=["POST"])
-def chat():
-    user = require_user()
-    if not user:
-        return jsonify({"error": "Not authenticated"}), 401
-
-    body = request.get_json(silent=True) or {}
-    user_message = (body.get("message") or "").strip()
-    chat_id = (body.get("chat_id") or "").strip()
-    mood = (body.get("mood") or "").strip().lower()
-    mood = mood if mood in MOODS else None
-
-    if not user_message:
-        return jsonify({"error": "Message cannot be empty."}), 400
-    if not valid_chat_id(chat_id):
-        return jsonify({"error": "A valid chat ID is required."}), 400
-
-    try:
-        history = recent_messages(user["id"], chat_id)
-        reply_text = generate_reply(user_message, history, mood)
-        save_exchange(user["id"], chat_id, user_message, reply_text)
-        return jsonify({"reply": reply_text})
-    except Exception as exc:
-        logger.exception("Text chat request failed")
-        return jsonify({"error": error_text(exc)}), 500
-
-
-@app.route("/api/chat/voice", methods=["POST"])
-def chat_voice():
-    user = require_user()
-    if not user:
-        return jsonify({"error": "Not authenticated"}), 401
-
-    if "audio" not in request.files:
-        return jsonify({"error": "No audio file was received."}), 400
-
-    chat_id = request.form.get("chat_id", "").strip()
-    if not valid_chat_id(chat_id):
-        return jsonify({"error": "A valid chat ID is required."}), 400
-
-    audio_file = request.files["audio"]
-    audio_bytes = audio_file.read()
-
-    if not audio_bytes:
-        return jsonify({"error": "The recording was empty. Please try again."}), 400
-    if len(audio_bytes) > MAX_AUDIO_BYTES:
-        return jsonify({"error": "That voice message is too long. Please keep it under a minute."}), 400
-
-    mime_type = audio_file.mimetype or "audio/webm"
-
-    try:
-        transcript = transcribe_audio(audio_bytes, mime_type)
-        if not transcript:
-            return jsonify({
-                "error": "I couldn't make out that recording. Try again, or type your message instead."
-            }), 422
-
-        history = recent_messages(user["id"], chat_id)
-        reply_text = generate_reply(transcript, history)
-        save_exchange(user["id"], chat_id, transcript, reply_text)
-        return jsonify({"transcript": transcript, "reply": reply_text})
-    except Exception as exc:
-        logger.exception("Voice chat request failed")
-        return jsonify({"error": error_text(exc)}), 500
-
-# -----------------------
-# Run
-# -----------------------
-
-if __name__ == "__main__":
-    app.run(
-        host="0.0.0.0",
-        port=int(os.environ.get("PORT", 5000)),
-        debug=False,
-        use_reloader=False,
-        threaded=True
-    )
-
-    # Preload the chat model so the first message isn't slow.
-    threading.Thread(target=load_chat_model, daemon=True).start()
-    # use_reloader=False stops debug mode from loading every model twice.
-    app.run(debug=True, use_reloader=False, port=5000, threaded=True)
+typed = st.chat_input("Type how you're feeling...")
+user_text = typed or pending_text
+if user_text:
+    respond(user_id, chat_id, user_text, mood, kb)

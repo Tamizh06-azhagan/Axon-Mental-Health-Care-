@@ -574,7 +574,16 @@ def chat_voice():
 # -----------------------
 # Run
 # -----------------------
+
 if __name__ == "__main__":
+    app.run(
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 5000)),
+        debug=False,
+        use_reloader=False,
+        threaded=True
+    )
+
     # Preload the chat model so the first message isn't slow.
     threading.Thread(target=load_chat_model, daemon=True).start()
     # use_reloader=False stops debug mode from loading every model twice.

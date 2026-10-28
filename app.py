@@ -1,5 +1,6 @@
 import hashlib
 import html as html_lib
+import io
 import json
 import logging
 import os
@@ -8,6 +9,7 @@ import re
 import tempfile
 import threading
 import uuid
+import wave
 from datetime import datetime
 from pathlib import Path
 
@@ -22,8 +24,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 st.set_page_config(
     page_title="Axon",
     page_icon="🧠",
-    layout="centered",
-    initial_sidebar_state="expanded",
+    layout="wide",
+    initial_sidebar_state="expanded" if st.user.is_logged_in else "collapsed",
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -87,12 +89,12 @@ MOOD_CHOICES = {
 MOODS = list(MOOD_CHOICES.values())
 STARTERS = ["I feel anxious", "I can't sleep", "I need to vent", "Help me calm down"]
 HELP_CHOICES = ["Talking it through", "A calming idea", "Just venting", "A small next step"]
-PICK_KEYS = ["mood_pick", "starter_pick", "ci_mood", "ci_heavy", "ci_help"]
 
 LOGO_SVG = (
     '<svg width="26" height="26" viewBox="0 0 256 256" fill="currentColor">'
     '<path d="M256 256H128L0 128h128z"/><path d="M256 128H128L0 0h128z"/></svg>'
 )
+PLAY_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>'
 TYPING_HTML = '<div class="row bot"><div class="bub typing"><i></i><i></i><i></i></div></div>'
 
 
@@ -136,67 +138,75 @@ html, body, .stApp { background: var(--bg) !important; }
 [data-testid="stAppViewContainer"] { background: linear-gradient(180deg, var(--g1), var(--g2)) !important; }
 [data-testid="stHeader"] { background: transparent !important; }
 [data-testid="stDecoration"], #MainMenu, footer { display: none !important; }
-[data-testid="stBottom"], [data-testid="stBottom"] > div, [data-testid="stBottomBlockContainer"] {
-  background: transparent !important;
-}
-.block-container { max-width: 760px; padding-top: 1.2rem; padding-bottom: 7rem; }
+[data-testid="stBottom"], [data-testid="stBottom"] > div,
+[data-testid="stBottomBlockContainer"] { background: transparent !important; }
+.block-container { max-width: 760px; padding-top: 1.5rem; padding-bottom: 6rem; }
 
 /* headings and text */
 h1, h2, h3, .serif { font-family: 'Fraunces', Georgia, serif !important; font-weight: 400 !important; color: var(--ink) !important; }
-[data-testid="stMarkdownContainer"], [data-testid="stMarkdownContainer"] p,
-[data-testid="stMarkdownContainer"] li { color: var(--ink); }
-[data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p { color: var(--ink2) !important; }
-[data-testid="stWidgetLabel"], [data-testid="stWidgetLabel"] p { color: var(--ink2) !important; font-size: 13px !important; }
-[data-testid="stImage"] img { border-radius: 50%; width: 36px; height: 36px; object-fit: cover; }
+[data-testid="stMarkdownContainer"] p, [data-testid="stMarkdownContainer"] li { color: var(--ink); }
+[data-testid="stCaptionContainer"] p { color: var(--ink2) !important; }
+[data-testid="stWidgetLabel"] p { color: var(--ink2) !important; font-size: 13px !important; }
+[data-testid="stImage"] img { border-radius: 50%; width: 32px; height: 32px; object-fit: cover; }
+[data-testid="stDivider"], hr { border-color: var(--line) !important; }
 
-/* button text always follows the button color (fixes invisible labels) */
-button p, button span, button div { color: inherit !important; }
-
-/* buttons */
-button[data-testid="stBaseButton-primary"], button[kind="primary"] {
+/* buttons: text colour is set explicitly on every kind so labels never disappear */
+button[kind="primary"], button[data-testid="stBaseButton-primary"] {
   background: var(--btn) !important; color: #FFFFFF !important; border: 0 !important;
   border-radius: 14px !important; font-weight: 500 !important;
 }
-button[data-testid="stBaseButton-primary"]:hover, button[kind="primary"]:hover { background: var(--btn2) !important; }
-button[data-testid="stBaseButton-secondary"], button[kind="secondary"] {
+button[kind="primary"]:hover, button[data-testid="stBaseButton-primary"]:hover {
+  background: var(--btn2) !important; color: #FFFFFF !important;
+}
+button[kind="secondary"], button[data-testid="stBaseButton-secondary"] {
   background: var(--card) !important; color: var(--ink) !important;
   border: 1px solid var(--line) !important; border-radius: 14px !important;
 }
-button[data-testid="stBaseButton-secondary"]:hover, button[kind="secondary"]:hover { border-color: var(--accent) !important; }
-button[data-testid="stBaseButton-tertiary"], button[kind="tertiary"] {
+button[kind="secondary"]:hover, button[data-testid="stBaseButton-secondary"]:hover {
+  border-color: var(--accent) !important; color: var(--ink) !important;
+}
+button[kind="tertiary"], button[data-testid="stBaseButton-tertiary"] {
   background: transparent !important; color: var(--ink) !important; border: 0 !important; border-radius: 12px !important;
 }
-button[data-testid="stBaseButton-tertiary"]:hover, button[kind="tertiary"]:hover { background: var(--hover) !important; }
+button[kind="tertiary"]:hover, button[data-testid="stBaseButton-tertiary"]:hover {
+  background: var(--hover) !important; color: var(--ink) !important;
+}
+button[kind] p, button[kind] span, button[data-testid^="stBaseButton"] p { color: inherit !important; }
 
-/* popover triggers (Voice, account) */
+/* popover triggers (voice, account) and their panels */
 [data-testid="stPopover"] button {
   background: var(--card) !important; color: var(--ink) !important;
   border: 1px solid var(--line) !important; border-radius: 999px !important; font-weight: 500 !important;
 }
-div[data-baseweb="popover"] > div, div[data-baseweb="popover"] ul {
+[data-testid="stPopover"] button p { color: var(--ink) !important; }
+[data-testid="stPopoverBody"], div[data-baseweb="popover"] > div {
   background: var(--card) !important; color: var(--ink) !important;
   border: 1px solid var(--line) !important; border-radius: 16px !important;
   box-shadow: 0 16px 40px -12px rgba(27,19,60,.25) !important;
 }
 
-/* pills and segmented control (mood, starters, check-in) */
+/* pills (mood, starters, check-in) */
 [data-testid="stPills"] button, button[data-testid="stBaseButton-pills"] {
   background: var(--card) !important; color: var(--ink) !important;
   border: 1px solid var(--line) !important; border-radius: 999px !important;
 }
-[data-testid="stPills"] button[aria-checked="true"], [data-testid="stPills"] button[aria-pressed="true"],
-button[data-testid="stBaseButton-pillsActive"] {
-  background: color-mix(in srgb, var(--accent) 18%, var(--card)) !important; color: var(--ink) !important;
-  border: 1px solid var(--accent) !important;
+[data-testid="stPills"] button p, button[data-testid="stBaseButton-pills"] p { color: var(--ink) !important; }
+[data-testid="stPills"] button[aria-checked="true"], button[data-testid="stBaseButton-pillsActive"] {
+  background: color-mix(in srgb, var(--accent) 18%, var(--card)) !important;
+  color: var(--ink) !important; border: 1px solid var(--accent) !important;
 }
+button[data-testid="stBaseButton-pillsActive"] p { color: var(--ink) !important; }
+
+/* segmented control (heaviness scale) */
 [data-testid="stSegmentedControl"] button {
   background: var(--card) !important; color: var(--ink) !important; border: 1px solid var(--line) !important;
 }
+[data-testid="stSegmentedControl"] button p { color: var(--ink) !important; }
 [data-testid="stSegmentedControl"] button[aria-checked="true"] {
   background: color-mix(in srgb, var(--accent) 18%, var(--card)) !important; border-color: var(--accent) !important;
 }
 
-/* chat input: rounded composer bar */
+/* composer bar */
 [data-testid="stChatInput"] {
   background: var(--card) !important; border: 1px solid var(--line) !important;
   border-radius: 22px !important; box-shadow: 0 10px 30px -14px rgba(27,19,60,.25) !important;
@@ -205,13 +215,13 @@ button[data-testid="stBaseButton-pillsActive"] {
   border-color: var(--accent) !important;
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent) !important;
 }
-[data-testid="stChatInput"] div { background-color: transparent !important; }
+[data-testid="stChatInput"] > div { background: transparent !important; }
 [data-testid="stChatInput"] textarea { color: var(--ink) !important; background: transparent !important; }
 [data-testid="stChatInput"] textarea::placeholder { color: var(--ink3) !important; opacity: 1; }
 [data-testid="stChatInput"] button { background: var(--btn) !important; color: #FFFFFF !important; border-radius: 14px !important; }
 [data-testid="stChatInput"] button svg { fill: #FFFFFF; }
 
-/* bordered cards (sign-in card, check-in card) */
+/* bordered cards (check-in, sign-in) */
 [data-testid="stVerticalBlockBorderWrapper"] {
   background: var(--card); border-radius: 22px !important; border-color: var(--line) !important;
 }
@@ -230,6 +240,14 @@ button[data-testid="stBaseButton-pillsActive"] {
 .typing i:nth-child(3) { animation-delay: .3s; }
 @keyframes dot { 40% { opacity: 1; transform: translateY(-3px); } }
 
+/* voice bubble */
+.voice { display: flex; align-items: center; gap: 10px; min-width: 190px; }
+.play { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; background: rgba(255,255,255,.2); color: #FFFFFF; flex: none; }
+.wave { display: flex; align-items: center; gap: 2px; height: 22px; flex: 1; }
+.wave span { width: 3px; border-radius: 9px; background: rgba(255,255,255,.55); }
+.dur { font-size: 12px; opacity: .75; }
+.cap { display: block; margin-top: 8px; font-size: 13px; opacity: .8; white-space: pre-wrap; }
+
 /* empty state: breathing orb */
 .empty { text-align: center; max-width: 500px; margin: 28px auto 12px; }
 .orb { width: 120px; height: 120px; margin: 0 auto 28px; border-radius: 50%;
@@ -238,22 +256,28 @@ button[data-testid="stBaseButton-pillsActive"] {
   animation: breathe 8s ease-in-out infinite; }
 @keyframes breathe { 0%, 100% { transform: scale(.88); } 50% { transform: scale(1.06); } }
 .empty h2 { font-size: 34px !important; line-height: 1.15; margin-bottom: 10px !important; }
-.empty p { color: var(--ink2); margin-bottom: 8px; }
+.empty p { color: var(--ink2); margin-bottom: 24px; }
+.empty p.mood-note { font-size: 12px; color: var(--ink3); margin: 12px 0 0; }
 
 /* header title */
-.title { font-family: 'Fraunces', Georgia, serif; font-size: 18px; color: var(--ink);
+.title { font-family: 'Fraunces', Georgia, serif; font-size: 17px; color: var(--ink);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* sidebar */
 [data-testid="stSidebar"] { background: var(--side) !important; border-right: 1px solid var(--line); }
-[data-testid="stSidebar"] .block-container { padding: 1.2rem 1rem 1rem; }
+[data-testid="stSidebarUserContent"] { padding: 1.2rem 1rem 1rem; }
 [data-testid="stSidebar"] button { justify-content: flex-start !important; text-align: left !important; }
 [data-testid="stSidebar"] button > div { justify-content: flex-start !important; width: 100%; }
 [data-testid="stSidebar"] button p { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-[class*="st-key-del-"] button { color: var(--danger) !important; justify-content: center !important; }
+[data-testid="stSidebar"] button[kind="primary"] { justify-content: center !important; }
+[data-testid="stSidebar"] button[kind="primary"] > div { justify-content: center !important; }
 .brand { display: flex; align-items: center; gap: 10px; font-family: 'Fraunces', serif; font-size: 22px; padding: 4px 4px 16px; color: var(--ink); }
 .side-h { font-size: 12px; color: var(--ink3); padding: 14px 4px 6px; }
 .side-foot { font-size: 12px; color: var(--ink3); margin-top: 20px; padding-top: 12px; border-top: 1px solid var(--line); line-height: 1.5; }
+[class*="st-key-del-"] button { opacity: 0; transition: opacity .15s; }
+div[data-testid="stHorizontalBlock"]:hover [class*="st-key-del-"] button { opacity: 1; }
+[class*="st-key-del-"] button, [class*="st-key-del-"] button p { color: var(--danger) !important; }
+[class*="st-key-del-"] button:hover { background: rgba(194,65,12,.1) !important; }
 
 /* sign-in card */
 .gate-logo { text-align: center; color: var(--ink); margin-top: 6px; }
@@ -266,7 +290,8 @@ button[data-testid="stBaseButton-pillsActive"] {
 """
 
 
-def theme_css(t):
+def theme_css(theme_id):
+    t = THEMES[theme_id]
     root = f""":root {{
   --ink: {t['ink']}; --bg: {t['bg']}; --card: {t['card']}; --accent: {t['accent']};
   --side: {t['side']}; --g1: {t['g1']}; --g2: {t['g2']}; --btn: {t['btn']};
@@ -279,7 +304,20 @@ def theme_css(t):
   color-scheme: {'dark' if t['dark'] else 'light'};
 }}
 """
-    return f"<style>{FONT_IMPORT}{root}{STATIC_CSS}</style>"
+    # Colour swatch in every theme button, and a highlight on the active theme
+    swatches = ""
+    for tid, th in THEMES.items():
+        swatches += (
+            f".st-key-th-{tid} button {{ justify-content: flex-start !important; gap: 8px; }}"
+            f".st-key-th-{tid} button::before {{ content: ''; display: inline-block; flex: none; width: 16px; height: 16px;"
+            f" border-radius: 50%; border: 1px solid var(--line);"
+            f" background: linear-gradient(135deg, {th['bg']} 50%, {th['accent']} 50%); }}"
+        )
+    active = (
+        f".st-key-th-{theme_id} button {{ border-color: var(--accent) !important;"
+        f" background: color-mix(in srgb, var(--accent) 14%, var(--card)) !important; }}"
+    )
+    return f"<style>{FONT_IMPORT}{root}{STATIC_CSS}{swatches}{active}</style>"
 
 
 # -----------------------
@@ -367,6 +405,10 @@ def load_chat(user_id, chat_id):
         return None
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def delete_chat_file(user_id, chat_id):
+    chat_path(user_id, chat_id).unlink(missing_ok=True)
 
 
 def save_exchange(user_id, chat_id, user_text, bot_text):
@@ -526,12 +568,24 @@ def transcribe_audio(audio_bytes):
             return " ".join(s.text.strip() for s in segments).strip()
 
 
+def wav_seconds(data):
+    try:
+        with wave.open(io.BytesIO(data)) as w:
+            return round(w.getnframes() / float(w.getframerate()))
+    except Exception:
+        return 0
+
+
 # -----------------------
 # UI helpers
 # -----------------------
 def esc(text):
     """Escape text for raw HTML. Newlines become line breaks."""
     return html_lib.escape(text or "").replace("\n", "<br>")
+
+
+def fmt_time(secs):
+    return f"{secs // 60}:{secs % 60:02d}"
 
 
 def bubble(text, who, cls=""):
@@ -541,20 +595,32 @@ def bubble(text, who, cls=""):
     )
 
 
+def voice_bubble(transcript, secs):
+    bars = "".join(f'<span style="height:{4 + (i * 7) % 16}px"></span>' for i in range(20))
+    cap = f'<span class="cap">{esc(transcript)}</span>' if transcript else ""
+    st.markdown(
+        f'<div class="row user"><div class="bub"><div class="voice">'
+        f'<span class="play">{PLAY_SVG}</span><div class="wave">{bars}</div>'
+        f'<span class="dur">{fmt_time(secs)}</span></div>{cap}</div></div>',
+        unsafe_allow_html=True,
+    )
+
+
 def render_empty_state():
+    v = st.session_state.ui_v
     st.markdown(
         '<div class="empty"><div class="orb"></div>'
         '<h2 class="serif">Hi, I\'m Axon. I\'m glad you\'re here.</h2>'
         "<p>This is a space to say what's on your mind, at your own pace. "
-        "You can type or record a voice message below. There's no wrong way to begin.</p>"
-        "</div>",
+        "You can type, use the mic, or start with a quick check-in below. "
+        "There's no wrong way to begin.</p></div>",
         unsafe_allow_html=True,
     )
     st.pills(
         "Optional: how would you describe today?",
         list(MOOD_CHOICES),
         selection_mode="single",
-        key="mood_pick",
+        key=f"mood_pick_{v}",
         on_change=on_mood_pick,
     )
     st.caption(
@@ -565,12 +631,13 @@ def render_empty_state():
         "Or start with something like:",
         STARTERS,
         selection_mode="single",
-        key="starter_pick",
+        key=f"starter_pick_{v}",
         on_change=on_starter_pick,
     )
 
 
 def render_checkin():
+    v = st.session_state.ui_v
     with st.container(border=True):
         st.markdown("**Quick check-in (optional)**")
         st.caption(
@@ -581,20 +648,20 @@ def render_checkin():
             "How would you describe right now?",
             list(MOOD_CHOICES),
             selection_mode="single",
-            key="ci_mood",
+            key=f"ci_mood_{v}",
         )
         st.segmented_control(
             "How heavy does it feel? 1 = light, 5 = very heavy",
             ["1", "2", "3", "4", "5"],
-            key="ci_heavy",
+            key=f"ci_heavy_{v}",
         )
         st.pills(
             "What would help most? (pick any)",
             HELP_CHOICES,
             selection_mode="multi",
-            key="ci_help",
+            key=f"ci_help_{v}",
         )
-        if st.session_state.get("ci_hint"):
+        if st.session_state.ci_hint:
             st.caption("Pick at least one option, or press Not now.")
         a, b, _ = st.columns([2, 2, 3])
         a.button("Share with Axon", type="primary", on_click=share_checkin, use_container_width=True)
@@ -604,32 +671,40 @@ def render_checkin():
 # -----------------------
 # Callbacks (run before the script on each rerun)
 # -----------------------
-def queue_message(text, mood=None):
-    st.session_state.pending = (text, mood)
-
-
-def reset_widgets():
-    for key in PICK_KEYS:
-        st.session_state.pop(key, None)
+def queue_message(text, mood=None, voice=None):
+    st.session_state.pending = (text, mood, voice)
 
 
 def on_mood_pick():
-    label = st.session_state.get("mood_pick")
+    label = st.session_state.get(f"mood_pick_{st.session_state.ui_v}")
     if label:
         key = MOOD_CHOICES[label]
         queue_message(f"I'm feeling {key} today.", key)
 
 
 def on_starter_pick():
-    text = st.session_state.get("starter_pick")
+    text = st.session_state.get(f"starter_pick_{st.session_state.ui_v}")
     if text:
         queue_message(text)
 
 
+def show_checkin():
+    st.session_state.checkin_open = True
+    st.session_state.ci_hint = False
+    st.session_state.ui_v += 1
+
+
+def close_checkin():
+    st.session_state.checkin_open = False
+    st.session_state.ci_hint = False
+    st.session_state.ui_v += 1
+
+
 def share_checkin():
-    mood_label = st.session_state.get("ci_mood")
-    heavy = st.session_state.get("ci_heavy")
-    helps = st.session_state.get("ci_help") or []
+    v = st.session_state.ui_v
+    mood_label = st.session_state.get(f"ci_mood_{v}")
+    heavy = st.session_state.get(f"ci_heavy_{v}")
+    helps = st.session_state.get(f"ci_help_{v}") or []
 
     parts = []
     if mood_label:
@@ -643,38 +718,27 @@ def share_checkin():
         return
 
     mood_key = MOOD_CHOICES[mood_label] if mood_label else None
-    st.session_state.ci_hint = False
     st.session_state.checkin_open = False
-    reset_widgets()
+    st.session_state.ci_hint = False
+    st.session_state.ui_v += 1
     queue_message("Quick check-in: " + " ".join(parts), mood_key)
-
-
-def close_checkin():
-    st.session_state.checkin_open = False
-    st.session_state.ci_hint = False
-    reset_widgets()
-
-
-def open_checkin():
-    st.session_state.checkin_open = True
 
 
 def start_new_chat(user_id):
     st.session_state.chat_id = create_chat(user_id)["id"]
     st.session_state.checkin_open = False
-    reset_widgets()
+    st.session_state.ui_v += 1
 
 
 def open_chat(chat_id):
     st.session_state.chat_id = chat_id
     st.session_state.checkin_open = False
-    reset_widgets()
+    st.session_state.ui_v += 1
 
 
-def delete_chat_cb(user_id, chat_id):
-    chat_path(user_id, chat_id).unlink(missing_ok=True)
-    if st.session_state.get("chat_id") == chat_id:
-        st.session_state.pop("chat_id", None)
+def open_delete(chat_id):
+    st.session_state.delete_target = chat_id
+    st.session_state.delete_open = True
 
 
 def set_theme(theme_id):
@@ -686,22 +750,34 @@ def init_state():
     if "theme" not in st.session_state:
         requested = st.query_params.get("theme", "lavender")
         st.session_state.theme = requested if requested in THEMES else "lavender"
+    st.session_state.setdefault("ui_v", 0)
     st.session_state.setdefault("checkin_open", False)
-    st.session_state.setdefault("checkin_offered_for", None)
     st.session_state.setdefault("ci_hint", False)
+    st.session_state.setdefault("checkin_offered_for", None)
+
+
+@st.dialog("Delete this chat?")
+def confirm_delete(user_id, chat_id):
+    st.write("This conversation will be removed. This can't be undone.")
+    c1, c2 = st.columns(2)
+    if c1.button("Cancel", use_container_width=True):
+        st.rerun()
+    if c2.button("Delete", type="primary", use_container_width=True):
+        delete_chat_file(user_id, chat_id)
+        if st.session_state.get("chat_id") == chat_id:
+            st.session_state.pop("chat_id", None)
+        st.rerun()
 
 
 # -----------------------
 # Page
 # -----------------------
 init_state()
-st.markdown(theme_css(THEMES[st.session_state.theme]), unsafe_allow_html=True)
+st.markdown(theme_css(st.session_state.theme), unsafe_allow_html=True)
 
 # Sign-in card
 if not st.user.is_logged_in:
-    st.button("Login with Google", on_click=st.login)
-    st.stop()
-    _, mid, _ = st.columns([1, 4, 1])
+    _, mid, _ = st.columns([1, 3, 1])
     with mid:
         with st.container(border=True):
             st.markdown(
@@ -721,50 +797,49 @@ chat_id = ensure_active_chat(user_id)
 
 # Header: title, avatar, account menu
 first_name = (st.user.get("name") or "You").split(" ")[0]
-title_col, avatar_col, account_col = st.columns([7, 1, 2], vertical_alignment="center")
-title_slot = title_col.empty()
-with avatar_col:
+head_title, head_avatar, head_account = st.columns([7, 1, 2], vertical_alignment="center")
+title_slot = head_title.empty()
+with head_avatar:
     if st.user.get("picture"):
-        st.image(st.user.get("picture"), width=36)
-with account_col:
+        st.image(st.user.get("picture"), width=32)
+with head_account:
     with st.popover(first_name):
         st.markdown(f"**{st.user.get('name') or 'Signed in'}**")
         if st.user.get("email"):
             st.caption(st.user.get("email"))
-        st.markdown("**Theme**")
+        st.caption("Theme")
         for group, ids in THEME_GROUPS:
             st.caption(group)
             cols = st.columns(2)
             for i, tid in enumerate(ids):
-                t = THEMES[tid]
-                active = tid == st.session_state.theme
-                label = ("✓ " if active else "") + ("🌙 " if t["dark"] and not active else "") + t["label"]
                 cols[i % 2].button(
-                    label,
+                    THEMES[tid]["label"],
                     key=f"th-{tid}",
                     on_click=set_theme,
                     args=(tid,),
-                    type="primary" if active else "secondary",
                     use_container_width=True,
                 )
         st.divider()
         st.button("Sign out", on_click=st.logout, use_container_width=True)
 
-# Slots filled after the new message is processed
+st.divider()
+
+# Slots, created in display order and filled below
 history_slot = st.container()
 checkin_slot = st.container()
+tools_slot = st.container()
 
-# Composer
+# Read the composer: voice first, then typed text
 pending = st.session_state.pop("pending", None)
 notice = None
 
-tool_col, checkin_col = st.columns([1, 1])
-with tool_col:
-    with st.popover("🎙️ Voice message"):
-        audio = st.audio_input("Record, then stop to send", key="voice_in")
-with checkin_col:
-    st.button("Quick check-in", on_click=open_checkin, use_container_width=True)
-st.caption("Axon offers support, not diagnosis or emergency care.")
+with tools_slot:
+    tool_col, check_col, _ = st.columns([2, 2, 4])
+    with tool_col:
+        with st.popover("🎙️ Voice message"):
+            audio = st.audio_input("Record, then stop to send", key="voice_in")
+    check_col.button("Quick check-in", on_click=show_checkin, use_container_width=True)
+    st.caption("Axon offers support, not diagnosis or emergency care.")
 
 if audio is not None:
     audio_bytes = audio.getvalue()
@@ -780,15 +855,15 @@ if audio is not None:
             with st.spinner("Listening..."):
                 transcript = transcribe_audio(audio_bytes)
             if transcript:
-                pending = pending or (transcript, None)
+                pending = (transcript, None, (audio_bytes, wav_seconds(audio_bytes)))
             else:
                 notice = "I couldn't make out that recording. Try again, or type your message instead."
 
 typed = st.chat_input("Write what's on your mind")
-if typed and typed.strip() and not pending:
-    pending = (typed.strip(), None)
+if typed and typed.strip() and pending is None:
+    pending = (typed.strip(), None, None)
 
-# Render history, then handle the new message
+# History, then the new message
 chat = load_chat(user_id, chat_id)
 
 with history_slot:
@@ -802,8 +877,13 @@ with history_slot:
         bubble(m["text"], "user" if m["sender"] == "user" else "bot")
 
     if pending:
-        text, mood = pending
-        bubble(text, "user")
+        text, mood, voice = pending
+        if voice:
+            voice_bubble(text, voice[1])
+            st.audio(voice[0], format="audio/wav")
+        else:
+            bubble(text, "user")
+
         typing_ph = st.empty()
         typing_ph.markdown(TYPING_HTML, unsafe_allow_html=True)
         reply = generate_reply(text, recent_messages(user_id, chat_id), mood, kb)
@@ -825,13 +905,13 @@ title_slot.markdown(f'<div class="title">{esc(title)}</div>', unsafe_allow_html=
 user_count = sum(1 for m in chat["messages"] if m["sender"] == "user")
 if pending and user_count == 3 and st.session_state.checkin_offered_for != chat_id:
     st.session_state.checkin_offered_for = chat_id
-    st.session_state.checkin_open = True
+    show_checkin()
 
 with checkin_slot:
     if st.session_state.checkin_open:
         render_checkin()
 
-# Sidebar: rendered last so it shows the newest titles
+# Sidebar, rendered last so it shows the newest titles
 with st.sidebar:
     st.markdown(f'<div class="brand">{LOGO_SVG}<span>Axon</span></div>', unsafe_allow_html=True)
     st.button(
@@ -847,8 +927,8 @@ with st.sidebar:
     if not shown:
         st.caption("Your conversations will appear here.")
     for c in shown:
-        col_open, col_del = st.columns([6, 1], vertical_alignment="center")
-        col_open.button(
+        open_col, del_col = st.columns([6, 1], vertical_alignment="center", gap="small")
+        open_col.button(
             c["title"],
             key=f"open-{c['id']}",
             on_click=open_chat,
@@ -856,15 +936,13 @@ with st.sidebar:
             type="secondary" if c["id"] == chat_id else "tertiary",
             use_container_width=True,
         )
-        col_del.button(
-            "✕",
-            key=f"del-{c['id']}",
-            on_click=delete_chat_cb,
-            args=(user_id, c["id"]),
-            type="tertiary",
-        )
+        del_col.button("✕", key=f"del-{c['id']}", on_click=open_delete, args=(c["id"],), type="tertiary")
 
     st.markdown(
         '<div class="side-foot">If you are in immediate danger, call your local emergency number.</div>',
         unsafe_allow_html=True,
     )
+
+# Delete confirmation (replaces the browser confirm() dialog)
+if st.session_state.pop("delete_open", False):
+    confirm_delete(user_id, st.session_state.get("delete_target"))

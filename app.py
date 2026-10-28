@@ -151,7 +151,10 @@ html, body, .stApp { background: var(--bg) !important; }
 [data-testid="stHeader"] { background: transparent !important; }
 [data-testid="stDecoration"], [data-testid="stToolbar"], [data-testid="stStatusWidget"],
 #MainMenu, footer { display: none !important; }
-.block-container { max-width: 760px; padding: 1.2rem 1rem 1rem; }
+.block-container { max-width: 760px; padding: 1.2rem 1rem 0.2rem; }
+.st-key-composer-bar { position: sticky; bottom: 0; z-index: 30; padding: 8px 0 0;
+  background: linear-gradient(180deg, transparent 0%, var(--g2) 30%); }
+.st-key-composer-bar iframe { display: block; }
 
 /* headings and text */
 h1, h2, h3, .serif { font-family: 'Fraunces', Georgia, serif !important; font-weight: 400 !important; color: var(--ink) !important; }
@@ -218,11 +221,7 @@ button[data-testid="stBaseButton-pillsActive"] {
 }
 
 /* composer: sticky at the bottom, fades into the page background */
-.st-key-composer-bar {
-  position: sticky; bottom: 0; z-index: 30;
-  padding: 18px 0 10px;
-  background: linear-gradient(180deg, transparent 0%, var(--g2) 40%);
-}
+
 
 /* chat bubbles */
 .row { display: flex; width: 100%; margin: 12px 0; }
@@ -297,7 +296,7 @@ div[data-testid="stHorizontalBlock"]:hover [class*="st-key-del-"] button { opaci
   .empty { margin-top: 6vh; }
   .empty h2 { font-size: 28px !important; }
   .orb { width: 96px; height: 96px; margin-bottom: 22px; }
-  .st-key-composer-bar { padding-top: 12px; }
+  .block-container { padding: .8rem .7rem .2rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {

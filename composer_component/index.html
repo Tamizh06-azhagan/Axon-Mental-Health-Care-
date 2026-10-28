@@ -4,92 +4,106 @@
 <meta charset="UTF-8">
 <style>
   :root {
-    --ink: #1B133C; --card: #FFFFFF; --accent: #6D5BD0; --btn: #1B133C; --btn2: #2D2456;
-    --danger: #C2410C; --line: rgba(27,19,60,.1); --ink2: rgba(27,19,60,.62); --ink3: rgba(27,19,60,.4);
+    --ink: #1B133C; --card: #FFFFFF; --accent: #6D5BD0;
+    --btn: #1B133C; --btn2: #2D2456; --danger: #C2410C;
+    --line: rgba(27,19,60,.12); --ink2: rgba(27,19,60,.62); --ink3: rgba(27,19,60,.4);
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { height: 68px; background: transparent; overflow: hidden;
-    font-family: 'Inter', system-ui, sans-serif; color: var(--ink); }
+  html, body {
+    background: transparent; overflow: hidden;
+    font-family: 'Inter', system-ui, sans-serif; color: var(--ink);
+  }
+  body { padding: 2px 4px 12px; }
 
-  .bar {
-    position: relative; display: flex; align-items: center; gap: 8px;
-    height: 58px; margin: 4px; padding: 6px;
-    background: var(--card); border: 1px solid var(--line); border-radius: 999px;
-    box-shadow: 0 12px 32px -14px rgba(27,19,60,.3);
+  .box {
+    background: var(--card); border: 1px solid var(--line); border-radius: 24px;
+    padding: 10px 12px 8px;
+    box-shadow: 0 10px 30px -18px rgba(27,19,60,.35);
     transition: border-color .2s, box-shadow .2s;
   }
-  .bar:focus-within { border-color: var(--accent);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent), 0 12px 32px -14px rgba(27,19,60,.3); }
-  .bar.recording { border-color: var(--danger);
-    box-shadow: 0 0 0 3px rgba(194,65,12,.15), 0 12px 32px -14px rgba(27,19,60,.3); }
-
-  .idle, .rec { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; height: 100%; }
-  .rec { display: none; padding-left: 8px; }
-  .bar.recording .idle { display: none; }
-  .bar.recording .rec { display: flex; }
-
-  .round { flex: none; width: 44px; height: 44px; border-radius: 50%; border: 0; cursor: pointer;
-    display: grid; place-items: center; transition: transform .15s, background .2s, opacity .2s; }
-  .round:active { transform: scale(.92); }
-  .mic { background: transparent; color: var(--ink2); }
-  .mic:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); color: var(--accent); }
-  .send { background: var(--btn); color: #FFFFFF; }
-  .send:hover:not(:disabled) { background: var(--btn2); }
-  .send:disabled { opacity: .35; cursor: default; }
-  .stop-btn { background: var(--danger); color: #FFFFFF; }
-  .stop-btn:hover { filter: brightness(1.08); }
-
-  input {
-    flex: 1; min-width: 0; height: 100%; border: 0; outline: 0; background: transparent;
-    font: inherit; font-size: 15px; color: var(--ink); padding: 0 6px;
+  .box:focus-within {
+    border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent),
+                0 10px 30px -18px rgba(27,19,60,.35);
   }
-  input::placeholder { color: var(--ink3); }
+  .box.recording {
+    border-color: color-mix(in srgb, var(--danger) 55%, transparent);
+    box-shadow: 0 0 0 3px rgba(194,65,12,.12), 0 10px 30px -18px rgba(27,19,60,.35);
+  }
 
-  .dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--danger);
-    animation: pulse 1.2s infinite; }
+  textarea {
+    display: block; width: 100%; min-height: 34px; max-height: 160px;
+    border: 0; outline: 0; resize: none; background: transparent;
+    font: inherit; font-size: 15px; line-height: 1.5; color: var(--ink);
+    padding: 6px 4px; overflow-y: auto;
+  }
+  textarea::placeholder { color: var(--ink3); }
+  .box.recording textarea { display: none; }
+
+  .rec-row { display: none; align-items: center; gap: 10px; height: 40px; padding: 0 4px; }
+  .box.recording .rec-row { display: flex; }
+  .dot {
+    flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--danger);
+    animation: pulse 1.2s infinite;
+  }
   @keyframes pulse {
     0% { box-shadow: 0 0 0 0 rgba(194,65,12,.45); }
-    70% { box-shadow: 0 0 0 10px rgba(194,65,12,0); }
+    70% { box-shadow: 0 0 0 9px rgba(194,65,12,0); }
     100% { box-shadow: 0 0 0 0 rgba(194,65,12,0); }
   }
-  .timer { flex: none; min-width: 40px; font-size: 14px; font-weight: 500;
-    font-variant-numeric: tabular-nums; color: var(--ink); }
-  .wave { flex: 1; min-width: 0; height: 36px; display: flex; align-items: center;
+  .timer { flex: none; min-width: 36px; font-size: 14px; font-weight: 500;
+    font-variant-numeric: tabular-nums; }
+  .wave { flex: 1; min-width: 0; height: 30px; display: flex; align-items: center;
     justify-content: center; gap: 3px; overflow: hidden; }
   .wave span { width: 3px; height: 4px; border-radius: 9px;
     background: linear-gradient(180deg, var(--accent), color-mix(in srgb, var(--accent) 45%, transparent)); }
-  .cancel { flex: none; width: 36px; height: 36px; border-radius: 50%; border: 0; cursor: pointer;
-    background: transparent; color: var(--ink2); display: grid; place-items: center; }
-  .cancel:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
-  svg { display: block; }
 
-  @media (max-width: 640px) {
-    .bar { gap: 6px; }
-    .round { width: 42px; height: 42px; }
+  .bottom { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
+  .group { display: flex; align-items: center; gap: 2px; }
+
+  .icon {
+    flex: none; width: 36px; height: 36px; border-radius: 50%; border: 0; cursor: pointer;
+    display: grid; place-items: center; background: transparent; color: var(--ink2);
+    transition: background .15s, color .15s, transform .15s;
   }
+  .icon:active { transform: scale(.92); }
+  .icon:hover { background: color-mix(in srgb, var(--ink) 7%, transparent); color: var(--ink); }
+
+  .cancel { display: none; color: var(--danger); }
+  .cancel:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
+  .box.recording .cancel { display: grid; }
+  .box.recording .mic { display: none; }
+
+  .send { background: color-mix(in srgb, var(--ink) 16%, transparent); color: #FFFFFF; }
+  .send:hover:not(:disabled) { background: var(--btn2); }
+  .send:not(:disabled) { background: var(--btn); }
+  .send:disabled { cursor: default; }
+  .send.stop { background: var(--danger); }
+  .send.stop:hover { filter: brightness(1.08); }
+  svg { display: block; }
 </style>
 </head>
 <body>
-<div class="bar" id="bar">
-  <div class="idle" id="idle">
-    <button class="round mic" id="mic" aria-label="Record a voice message" title="Record a voice message">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4"/></svg>
-    </button>
-    <input id="text" type="text" autocomplete="off" placeholder="Write what's on your mind">
-    <button class="round send" id="send" aria-label="Send" disabled>
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
-    </button>
-  </div>
+<div class="box" id="box">
+  <textarea id="text" rows="1" placeholder="Write what's on your mind" aria-label="Message"></textarea>
 
-  <div class="rec" id="rec">
+  <div class="rec-row">
     <span class="dot"></span>
     <span class="timer" id="timer">0:00</span>
     <div class="wave" id="wave"></div>
-    <button class="cancel" id="cancel" aria-label="Cancel recording" title="Cancel">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
-    </button>
-    <button class="round stop-btn" id="stop" aria-label="Send voice message" title="Send">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+  </div>
+
+  <div class="bottom">
+    <div class="group">
+      <button class="icon mic" id="mic" aria-label="Record a voice message" title="Record a voice message">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4"/></svg>
+      </button>
+      <button class="icon cancel" id="cancel" aria-label="Cancel recording" title="Cancel">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <button class="icon send" id="send" aria-label="Send" disabled>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
     </button>
   </div>
 </div>
@@ -97,18 +111,19 @@
 <script>
 (() => {
   const $ = id => document.getElementById(id);
-  const bar = $('bar'), input = $('text'), sendBtn = $('send'), micBtn = $('mic');
-  const stopBtn = $('stop'), cancelBtn = $('cancel'), timer = $('timer'), wave = $('wave');
+  const box = $('box'), ta = $('text'), sendBtn = $('send'), micBtn = $('mic');
+  const cancelBtn = $('cancel'), timer = $('timer'), wave = $('wave');
   const MAX_SECS = 60, MAX_BYTES = 5 * 1024 * 1024;
   const DEFAULT_PLACEHOLDER = "Write what's on your mind";
 
   let placeholder = DEFAULT_PLACEHOLDER;
   let stream = null, recorder = null, chunks = [], mime = 'audio/webm';
-  let ctx = null, analyser = null, raf = null, tick = null, t0 = 0, dropRec = false, flashTimer = null;
+  let ctx = null, analyser = null, raf = null, tick = null, t0 = 0, dropRec = false;
+  let recording = false, flashTimer = null;
 
   // Bars for the live waveform
   const bars = [];
-  for (let i = 0; i < 28; i++) { const s = document.createElement('span'); wave.appendChild(s); bars.push(s); }
+  for (let i = 0; i < 26; i++) { const s = document.createElement('span'); wave.appendChild(s); bars.push(s); }
 
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   const fmt = s => Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
@@ -116,7 +131,10 @@
   // Streamlit component protocol
   const post = (type, data = {}) => window.parent.postMessage({ isStreamlitMessage: true, type, ...data }, '*');
   const sendValue = value => post('streamlit:setComponentValue', { value, dataType: 'json' });
-  const setHeight = () => post('streamlit:setFrameHeight', { height: 68 });
+  const reportHeight = () => post('streamlit:setFrameHeight', { height: Math.ceil(box.offsetHeight) + 14 });
+
+  // Keep the iframe exactly as tall as the box, so no empty space is left below the composer
+  new ResizeObserver(reportHeight).observe(box);
 
   function applyTheme(t) {
     if (!t) return;
@@ -126,7 +144,7 @@
     s.setProperty('--accent', t.accent);
     s.setProperty('--btn', t.btn);
     s.setProperty('--btn2', `color-mix(in srgb, ${t.btn} 82%, white)`);
-    s.setProperty('--line', `color-mix(in srgb, ${t.ink} 10%, transparent)`);
+    s.setProperty('--line', `color-mix(in srgb, ${t.ink} 12%, transparent)`);
     s.setProperty('--ink2', `color-mix(in srgb, ${t.ink} 62%, transparent)`);
     s.setProperty('--ink3', `color-mix(in srgb, ${t.ink} 40%, transparent)`);
     document.documentElement.style.colorScheme = t.dark ? 'dark' : 'light';
@@ -138,33 +156,55 @@
     applyTheme(args.theme);
     if (args.placeholder && args.placeholder !== placeholder) {
       placeholder = args.placeholder;
-      input.placeholder = placeholder;
+      ta.placeholder = placeholder;
     }
-    setHeight();
+    reportHeight();
   });
   post('streamlit:componentReady', { apiVersion: 1 });
-  setHeight();
 
-  // Text
-  function updateSend() { sendBtn.disabled = !input.value.trim(); }
+  // Button state: send when there is text, stop when recording
+  function refreshSend() {
+    if (recording) {
+      sendBtn.disabled = false;
+      sendBtn.classList.add('stop');
+      sendBtn.setAttribute('aria-label', 'Send voice message');
+    } else {
+      sendBtn.disabled = !ta.value.trim();
+      sendBtn.classList.remove('stop');
+      sendBtn.setAttribute('aria-label', 'Send');
+    }
+  }
+
+  // Auto-grow textarea
+  function grow() {
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(ta.scrollHeight, 160) + 'px';
+  }
+
   function sendText() {
-    const text = input.value.trim();
+    const text = ta.value.trim();
     if (!text) return;
     sendValue({ id: uid(), kind: 'text', text });
-    input.value = '';
-    updateSend();
+    ta.value = '';
+    grow();
+    refreshSend();
   }
-  input.addEventListener('input', updateSend);
-  input.addEventListener('keydown', e => {
-    if (e.key === 'Enter') { e.preventDefault(); sendText(); }
+
+  ta.addEventListener('input', () => { grow(); refreshSend(); });
+  ta.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendText(); }
   });
-  sendBtn.addEventListener('click', sendText);
+
+  sendBtn.addEventListener('click', () => {
+    if (recording) stopRec(false);
+    else sendText();
+  });
 
   // Voice
   function flash(message) {
-    input.placeholder = message;
+    ta.placeholder = message;
     clearTimeout(flashTimer);
-    flashTimer = setTimeout(() => { input.placeholder = placeholder; }, 2600);
+    flashTimer = setTimeout(() => { ta.placeholder = placeholder; }, 2600);
   }
 
   function drawWave() {
@@ -177,12 +217,13 @@
     const now = Date.now();
     bars.forEach((b, i) => {
       const wobble = 0.55 + 0.45 * Math.sin(now / 110 + i * 0.6);
-      b.style.height = (4 + level * wobble * 30) + 'px';
+      b.style.height = (4 + level * wobble * 26) + 'px';
     });
     raf = requestAnimationFrame(drawWave);
   }
 
   async function startRec() {
+    if (recording) return;
     if (!navigator.mediaDevices || !window.MediaRecorder) {
       flash('Voice recording is not supported in this browser');
       return;
@@ -214,9 +255,11 @@
     analyser.fftSize = 256;
     ctx.createMediaStreamSource(stream).connect(analyser);
 
+    recording = true;
     t0 = Date.now();
     timer.textContent = '0:00';
-    bar.classList.add('recording');
+    box.classList.add('recording');
+    refreshSend();
     tick = setInterval(() => {
       const secs = Math.floor((Date.now() - t0) / 1000);
       timer.textContent = fmt(secs);
@@ -240,7 +283,9 @@
     if (stream) stream.getTracks().forEach(t => t.stop());
     if (ctx) ctx.close().catch(() => {});
     stream = null; ctx = null; analyser = null; recorder = null; chunks = [];
-    bar.classList.remove('recording');
+    recording = false;
+    box.classList.remove('recording');
+    refreshSend();
 
     if (dropRec) return;
     if (secs < 1 || blob.size < 800) { flash('Hold a little longer to record'); return; }
@@ -255,8 +300,10 @@
   }
 
   micBtn.addEventListener('click', startRec);
-  stopBtn.addEventListener('click', () => stopRec(false));
   cancelBtn.addEventListener('click', () => stopRec(true));
+
+  refreshSend();
+  reportHeight();
 })();
 </script>
 </body>

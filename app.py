@@ -289,45 +289,59 @@ div[data-testid="stHorizontalBlock"]:hover [class*="st-key-del-"] button { opaci
 }
 """
 
-# Sign-in page: soft colour orbs, frosted glass card, pill button
+# Sign-in page: drifting colour orbs, frosted glass card, Google button
 GATE_CSS = """
-/* sign-in page: soft colour orbs behind the glass card */
-[data-testid="stAppViewContainer"]:has(.st-key-gate-card) {
-  background:
-    radial-gradient(circle at 18% 22%, color-mix(in srgb, var(--orb1) 70%, transparent) 0, transparent 38%),
-    radial-gradient(circle at 84% 80%, color-mix(in srgb, var(--orb2) 45%, transparent) 0, transparent 42%),
-    linear-gradient(180deg, var(--g1), var(--g2)) !important;
+/* sign-in: soft drifting colour orbs behind a frosted glass card */
+.gate-orbs { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
+.gate-orbs span { position: absolute; border-radius: 50%; filter: blur(70px);
+  animation: drift 16s ease-in-out infinite alternate; }
+.gate-orbs .o1 { width: 52vw; height: 52vw; left: -12vw; top: -14vw; background: var(--orb1); opacity: .95; }
+.gate-orbs .o2 { width: 46vw; height: 46vw; right: -14vw; bottom: -16vw; background: var(--orb2); opacity: .7; animation-delay: -6s; }
+.gate-orbs .o3 { width: 28vw; height: 28vw; left: 46vw; top: 40vh; background: var(--accent); opacity: .35; animation-delay: -11s; }
+@keyframes drift {
+  from { transform: translate(0, 0) scale(1); }
+  to { transform: translate(4vw, 3vh) scale(1.08); }
 }
 
 /* frosted glass card */
 .st-key-gate-card {
-  background: color-mix(in srgb, var(--card) 55%, transparent) !important;
-  backdrop-filter: blur(22px) saturate(160%);
-  -webkit-backdrop-filter: blur(22px) saturate(160%);
-  border: 1px solid var(--line) !important;
-  border-radius: 28px !important;
-  box-shadow: 0 30px 70px -24px rgba(27, 19, 60, .35), inset 0 1px 0 rgba(255, 255, 255, .5);
-  padding: 2.4rem 2.2rem 2rem !important;
+  position: relative; z-index: 1;
+  max-width: 440px; margin: 0 auto;
+  background: color-mix(in srgb, var(--card) 62%, transparent) !important;
+  backdrop-filter: blur(24px) saturate(170%);
+  -webkit-backdrop-filter: blur(24px) saturate(170%);
+  border: 1px solid color-mix(in srgb, #FFFFFF 60%, transparent) !important;
+  border-radius: 26px !important;
+  box-shadow: 0 40px 80px -30px rgba(27, 19, 60, .45), inset 0 1px 0 rgba(255, 255, 255, .7) !important;
+  padding: 2.6rem 2.4rem 2.2rem !important;
 }
 
 /* logo sits in a soft glowing orb */
 .gate-logo {
-  width: 68px; height: 68px; margin: 0 auto 8px; border-radius: 50%;
+  width: 68px; height: 68px; margin: 0 auto 10px; border-radius: 50%;
   display: grid; place-items: center; color: var(--ink);
   background: radial-gradient(circle at 35% 30%, #FFFFFF 0, var(--orb1) 45%, var(--orb2) 100%);
   box-shadow: 0 14px 34px -12px color-mix(in srgb, var(--accent) 60%, transparent);
 }
 .gate-logo svg { width: 30px; height: 30px; }
+.gate-h { font-size: 28px !important; line-height: 1.2 !important; }
 
-/* sign-in button: pill shape with a gentle lift on hover */
+/* sign-in button: pill shape, real Google G in a white badge */
 .st-key-gate-login button[kind="primary"] {
-  height: 52px; border-radius: 999px !important; font-size: 15px !important;
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  height: 52px; width: 100%; border-radius: 999px !important; font-size: 15px !important;
   box-shadow: 0 12px 28px -12px color-mix(in srgb, var(--btn) 80%, transparent);
   transition: transform .2s, box-shadow .2s;
 }
 .st-key-gate-login button[kind="primary"]:hover {
   transform: translateY(-1px);
   box-shadow: 0 18px 36px -12px color-mix(in srgb, var(--btn) 85%, transparent);
+}
+.st-key-gate-login button[kind="primary"]::before {
+  content: ""; flex: none; width: 24px; height: 24px; border-radius: 50%;
+  background-color: #FFFFFF;
+  background-image: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'><path fill='%23EA4335' d='M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z'/><path fill='%234285F4' d='M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z'/><path fill='%23FBBC05' d='M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z'/><path fill='%2334A853' d='M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z'/></svg>");
+  background-repeat: no-repeat; background-position: center; background-size: 14px 14px;
 }
 """
 
@@ -819,13 +833,18 @@ st.markdown(theme_css(st.session_state.theme), unsafe_allow_html=True)
 
 # Sign-in card
 if not st.user.is_logged_in:
-    st.markdown('<div style="height:9vh"></div>', unsafe_allow_html=True)
-    _, mid, _ = st.columns([1, 2, 1])
+    st.markdown(
+        '<div class="gate-orbs" aria-hidden="true">'
+        '<span class="o1"></span><span class="o2"></span><span class="o3"></span></div>'
+        '<div style="height:8vh"></div>',
+        unsafe_allow_html=True,
+    )
+    _, mid, _ = st.columns([1, 3, 1])
     with mid:
         with st.container(border=True, key="gate-card"):
             st.markdown(
                 f'<div class="gate-logo">{LOGO_SVG}</div>'
-                '<h2 class="serif gate-h">A quiet place to talk</h2>'
+                '<h2 class="serif gate-h" style="text-align:center;margin:0 0 6px">A quiet place to talk</h2>'
                 '<p class="gate-p">Sign in to save your conversations and pick up where you left off.</p>',
                 unsafe_allow_html=True,
             )

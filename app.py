@@ -137,7 +137,8 @@ html, body, .stApp { background: var(--bg) !important; }
 .stApp { color: var(--ink); font-family: 'Inter', system-ui, sans-serif; }
 [data-testid="stAppViewContainer"] { background: linear-gradient(180deg, var(--g1), var(--g2)) !important; }
 [data-testid="stHeader"] { background: transparent !important; }
-[data-testid="stDecoration"], #MainMenu, footer { display: none !important; }
+[data-testid="stDecoration"], [data-testid="stToolbar"], [data-testid="stStatusWidget"],
+#MainMenu, footer { display: none !important; }
 [data-testid="stBottom"], [data-testid="stBottom"] > div,
 [data-testid="stBottomBlockContainer"] { background: transparent !important; }
 .block-container { max-width: 760px; padding-top: 1.5rem; padding-bottom: 6rem; }
@@ -221,7 +222,7 @@ button[data-testid="stBaseButton-pillsActive"] p { color: var(--ink) !important;
 [data-testid="stChatInput"] button { background: var(--btn) !important; color: #FFFFFF !important; border-radius: 14px !important; }
 [data-testid="stChatInput"] button svg { fill: #FFFFFF; }
 
-/* bordered cards (check-in, sign-in) */
+/* bordered cards (check-in) */
 [data-testid="stVerticalBlockBorderWrapper"] {
   background: var(--card); border-radius: 22px !important; border-color: var(--line) !important;
 }
@@ -279,13 +280,54 @@ div[data-testid="stHorizontalBlock"]:hover [class*="st-key-del-"] button { opaci
 [class*="st-key-del-"] button, [class*="st-key-del-"] button p { color: var(--danger) !important; }
 [class*="st-key-del-"] button:hover { background: rgba(194,65,12,.1) !important; }
 
-/* sign-in card */
-.gate-logo { text-align: center; color: var(--ink); margin-top: 6px; }
+/* sign-in text */
 .gate-h { text-align: center; font-size: 30px !important; margin: 10px 0 6px !important; }
 .gate-p { text-align: center; color: var(--ink2); font-size: 14px; margin-bottom: 18px; }
 
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
+}
+"""
+
+# Sign-in page: soft colour orbs, frosted glass card, pill button
+GATE_CSS = """
+/* sign-in page: soft colour orbs behind the glass card */
+[data-testid="stAppViewContainer"]:has(.st-key-gate-card) {
+  background:
+    radial-gradient(circle at 18% 22%, color-mix(in srgb, var(--orb1) 70%, transparent) 0, transparent 38%),
+    radial-gradient(circle at 84% 80%, color-mix(in srgb, var(--orb2) 45%, transparent) 0, transparent 42%),
+    linear-gradient(180deg, var(--g1), var(--g2)) !important;
+}
+
+/* frosted glass card */
+.st-key-gate-card {
+  background: color-mix(in srgb, var(--card) 55%, transparent) !important;
+  backdrop-filter: blur(22px) saturate(160%);
+  -webkit-backdrop-filter: blur(22px) saturate(160%);
+  border: 1px solid var(--line) !important;
+  border-radius: 28px !important;
+  box-shadow: 0 30px 70px -24px rgba(27, 19, 60, .35), inset 0 1px 0 rgba(255, 255, 255, .5);
+  padding: 2.4rem 2.2rem 2rem !important;
+}
+
+/* logo sits in a soft glowing orb */
+.gate-logo {
+  width: 68px; height: 68px; margin: 0 auto 8px; border-radius: 50%;
+  display: grid; place-items: center; color: var(--ink);
+  background: radial-gradient(circle at 35% 30%, #FFFFFF 0, var(--orb1) 45%, var(--orb2) 100%);
+  box-shadow: 0 14px 34px -12px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+.gate-logo svg { width: 30px; height: 30px; }
+
+/* sign-in button: pill shape with a gentle lift on hover */
+.st-key-gate-login button[kind="primary"] {
+  height: 52px; border-radius: 999px !important; font-size: 15px !important;
+  box-shadow: 0 12px 28px -12px color-mix(in srgb, var(--btn) 80%, transparent);
+  transition: transform .2s, box-shadow .2s;
+}
+.st-key-gate-login button[kind="primary"]:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 18px 36px -12px color-mix(in srgb, var(--btn) 85%, transparent);
 }
 """
 
@@ -317,7 +359,7 @@ def theme_css(theme_id):
         f".st-key-th-{theme_id} button {{ border-color: var(--accent) !important;"
         f" background: color-mix(in srgb, var(--accent) 14%, var(--card)) !important; }}"
     )
-    return f"<style>{FONT_IMPORT}{root}{STATIC_CSS}{swatches}{active}</style>"
+    return f"<style>{FONT_IMPORT}{root}{STATIC_CSS}{GATE_CSS}{swatches}{active}</style>"
 
 
 # -----------------------
@@ -777,16 +819,23 @@ st.markdown(theme_css(st.session_state.theme), unsafe_allow_html=True)
 
 # Sign-in card
 if not st.user.is_logged_in:
-    _, mid, _ = st.columns([1, 3, 1])
+    st.markdown('<div style="height:9vh"></div>', unsafe_allow_html=True)
+    _, mid, _ = st.columns([1, 2, 1])
     with mid:
-        with st.container(border=True):
+        with st.container(border=True, key="gate-card"):
             st.markdown(
                 f'<div class="gate-logo">{LOGO_SVG}</div>'
                 '<h2 class="serif gate-h">A quiet place to talk</h2>'
                 '<p class="gate-p">Sign in to save your conversations and pick up where you left off.</p>',
                 unsafe_allow_html=True,
             )
-            st.button("Continue with Google", type="primary", use_container_width=True, on_click=st.login)
+            st.button(
+                "Continue with Google",
+                type="primary",
+                key="gate-login",
+                use_container_width=True,
+                on_click=st.login,
+            )
             st.caption("Axon offers support, not diagnosis or emergency care.")
     st.stop()
 
@@ -832,6 +881,7 @@ tools_slot = st.container()
 # Read the composer: voice first, then typed text
 pending = st.session_state.pop("pending", None)
 notice = None
+audio = None
 
 with tools_slot:
     tool_col, check_col, _ = st.columns([2, 2, 4])

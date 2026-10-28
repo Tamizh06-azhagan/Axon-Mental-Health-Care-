@@ -1,6 +1,5 @@
-import hashlib
+import base64
 import html as html_lib
-import io
 import json
 import logging
 import os
@@ -8,13 +7,14 @@ import random
 import re
 import tempfile
 import threading
+import time
 import uuid
-import wave
 from datetime import datetime
 from pathlib import Path
 
 import numpy as np
 import streamlit as st
+import streamlit.components.v1 as components
 import torch
 from faster_whisper import WhisperModel
 from sentence_transformers import SentenceTransformer
@@ -38,6 +38,10 @@ BASE_DIR = Path(__file__).resolve().parent
 DATASET_PATH = Path(os.getenv("DATASET_PATH", BASE_DIR / "mentalhealthchatbot.txt"))
 CHATS_DIR = BASE_DIR / "user_chats"
 CHATS_DIR.mkdir(exist_ok=True)
+COMPOSER_DIR = BASE_DIR / "composer_component"
+
+# Custom bottom bar (text + voice recorder), built from composer_component/index.html
+_composer = components.declare_component("axon_composer", path=str(COMPOSER_DIR))
 
 CHAT_MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
 TRANSCRIPTION_MODEL_NAME = "tiny"
@@ -45,6 +49,13 @@ MAX_AUDIO_BYTES = 5 * 1024 * 1024
 SIMILARITY_THRESHOLD = 0.45   # below this, the dataset answer is ignored
 HISTORY_TURNS = 6             # previous messages sent to the model
 UUID_RE = re.compile(r"^[0-9a-fA-F-]{36}$")
+AUDIO_SUFFIX = {
+    "audio/webm": ".webm",
+    "audio/ogg": ".ogg",
+    "audio/mp4": ".m4a",
+    "audio/mpeg": ".mp3",
+    "audio/wav": ".wav",
+}
 
 # Immediate danger: thoughts of self-harm, or of harming someone else.
 CRISIS_PATTERNS = re.compile(
@@ -87,15 +98,16 @@ MOOD_CHOICES = {
     "😶 Numb": "numb",
 }
 MOODS = list(MOOD_CHOICES.values())
-STARTERS = ["I feel anxious", "I can't sleep", "I need to vent", "Help me calm down"]
 HELP_CHOICES = ["Talking it through", "A calming idea", "Just venting", "A small next step"]
 
 LOGO_SVG = (
     '<svg width="26" height="26" viewBox="0 0 256 256" fill="currentColor">'
     '<path d="M256 256H128L0 128h128z"/><path d="M256 128H128L0 0h128z"/></svg>'
 )
-PLAY_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>'
-TYPING_HTML = '<div class="row bot"><div class="bub typing"><i></i><i></i><i></i></div></div>'
+SKELETON_HTML = (
+    '<div class="row bot"><div class="bub skel" aria-label="Axon is replying">'
+    '<span class="l1"></span><span class="l2"></span><span class="l3"></span></div></div>'
+)
 
 
 # -----------------------
@@ -139,9 +151,7 @@ html, body, .stApp { background: var(--bg) !important; }
 [data-testid="stHeader"] { background: transparent !important; }
 [data-testid="stDecoration"], [data-testid="stToolbar"], [data-testid="stStatusWidget"],
 #MainMenu, footer { display: none !important; }
-[data-testid="stBottom"], [data-testid="stBottom"] > div,
-[data-testid="stBottomBlockContainer"] { background: transparent !important; }
-.block-container { max-width: 760px; padding-top: 1.5rem; padding-bottom: 6rem; }
+.block-container { max-width: 760px; padding: 1.2rem 1rem 1rem; }
 
 /* headings and text */
 h1, h2, h3, .serif { font-family: 'Fraunces', Georgia, serif !important; font-weight: 400 !important; color: var(--ink) !important; }
@@ -151,7 +161,7 @@ h1, h2, h3, .serif { font-family: 'Fraunces', Georgia, serif !important; font-we
 [data-testid="stImage"] img { border-radius: 50%; width: 32px; height: 32px; object-fit: cover; }
 [data-testid="stDivider"], hr { border-color: var(--line) !important; }
 
-/* buttons: text colour is set explicitly on every kind so labels never disappear */
+/* buttons: text colour is set on every kind so labels never disappear */
 button[kind="primary"], button[data-testid="stBaseButton-primary"] {
   background: var(--btn) !important; color: #FFFFFF !important; border: 0 !important;
   border-radius: 14px !important; font-weight: 500 !important;
@@ -172,9 +182,25 @@ button[kind="tertiary"], button[data-testid="stBaseButton-tertiary"] {
 button[kind="tertiary"]:hover, button[data-testid="stBaseButton-tertiary"]:hover {
   background: var(--hover) !important; color: var(--ink) !important;
 }
-button[kind] p, button[kind] span, button[data-testid^="stBaseButton"] p { color: inherit !important; }
+button[kind] p, button[data-testid^="stBaseButton"] p { color: inherit !important; }
 
-/* popover triggers (voice, account) and their panels */
+/* pills (mood check-in and heaviness scale): light pill, accent when selected */
+[data-testid="stPills"] button, button[kind="pills"], button[kind="pillsActive"],
+button[data-testid="stBaseButton-pills"], button[data-testid="stBaseButton-pillsActive"] {
+  background: var(--card) !important; color: var(--ink) !important;
+  border: 1px solid var(--line) !important; border-radius: 999px !important;
+}
+[data-testid="stPills"] button p, button[kind="pills"] p, button[kind="pillsActive"] p,
+button[data-testid="stBaseButton-pills"] p, button[data-testid="stBaseButton-pillsActive"] p {
+  color: var(--ink) !important;
+}
+[data-testid="stPills"] button[aria-checked="true"], button[kind="pillsActive"],
+button[data-testid="stBaseButton-pillsActive"] {
+  background: color-mix(in srgb, var(--accent) 20%, var(--card)) !important;
+  border-color: var(--accent) !important;
+}
+
+/* popover (account menu) panel */
 [data-testid="stPopover"] button {
   background: var(--card) !important; color: var(--ink) !important;
   border: 1px solid var(--line) !important; border-radius: 999px !important; font-weight: 500 !important;
@@ -186,79 +212,59 @@ button[kind] p, button[kind] span, button[data-testid^="stBaseButton"] p { color
   box-shadow: 0 16px 40px -12px rgba(27,19,60,.25) !important;
 }
 
-/* pills (mood, starters, check-in) */
-[data-testid="stPills"] button, button[data-testid="stBaseButton-pills"] {
-  background: var(--card) !important; color: var(--ink) !important;
-  border: 1px solid var(--line) !important; border-radius: 999px !important;
-}
-[data-testid="stPills"] button p, button[data-testid="stBaseButton-pills"] p { color: var(--ink) !important; }
-[data-testid="stPills"] button[aria-checked="true"], button[data-testid="stBaseButton-pillsActive"] {
-  background: color-mix(in srgb, var(--accent) 18%, var(--card)) !important;
-  color: var(--ink) !important; border: 1px solid var(--accent) !important;
-}
-button[data-testid="stBaseButton-pillsActive"] p { color: var(--ink) !important; }
-
-/* segmented control (heaviness scale) */
-[data-testid="stSegmentedControl"] button {
-  background: var(--card) !important; color: var(--ink) !important; border: 1px solid var(--line) !important;
-}
-[data-testid="stSegmentedControl"] button p { color: var(--ink) !important; }
-[data-testid="stSegmentedControl"] button[aria-checked="true"] {
-  background: color-mix(in srgb, var(--accent) 18%, var(--card)) !important; border-color: var(--accent) !important;
-}
-
-/* composer bar */
-[data-testid="stChatInput"] {
-  background: var(--card) !important; border: 1px solid var(--line) !important;
-  border-radius: 22px !important; box-shadow: 0 10px 30px -14px rgba(27,19,60,.25) !important;
-}
-[data-testid="stChatInput"]:focus-within {
-  border-color: var(--accent) !important;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent) !important;
-}
-[data-testid="stChatInput"] > div { background: transparent !important; }
-[data-testid="stChatInput"] textarea { color: var(--ink) !important; background: transparent !important; }
-[data-testid="stChatInput"] textarea::placeholder { color: var(--ink3) !important; opacity: 1; }
-[data-testid="stChatInput"] button { background: var(--btn) !important; color: #FFFFFF !important; border-radius: 14px !important; }
-[data-testid="stChatInput"] button svg { fill: #FFFFFF; }
-
 /* bordered cards (check-in) */
 [data-testid="stVerticalBlockBorderWrapper"] {
   background: var(--card); border-radius: 22px !important; border-color: var(--line) !important;
 }
 
+/* composer: sticky at the bottom, fades into the page background */
+.st-key-composer-bar {
+  position: sticky; bottom: 0; z-index: 30;
+  padding: 18px 0 10px;
+  background: linear-gradient(180deg, transparent 0%, var(--g2) 40%);
+}
+
 /* chat bubbles */
 .row { display: flex; width: 100%; margin: 12px 0; }
 .row.user { justify-content: flex-end; }
-.bub { max-width: 80%; padding: 12px 16px; border-radius: 18px; line-height: 1.55; font-size: 15px; overflow-wrap: anywhere; animation: in .25s ease-out; }
-.user .bub { background: var(--btn); color: #FFFFFF; border-bottom-right-radius: 5px; }
-.bot .bub { background: var(--card); color: var(--ink); border: 1px solid var(--line); border-bottom-left-radius: 5px; max-width: 86%; }
+.bub { max-width: 82%; padding: 12px 16px; border-radius: 18px; line-height: 1.55; font-size: 15px;
+  overflow-wrap: anywhere; animation: rise .35s cubic-bezier(.2,.8,.2,1); }
+.user .bub { background: var(--btn); color: #FFFFFF; border-bottom-right-radius: 6px;
+  box-shadow: 0 10px 24px -14px color-mix(in srgb, var(--btn) 70%, transparent); }
+.bot .bub { background: var(--card); color: var(--ink); border: 1px solid var(--line);
+  border-bottom-left-radius: 6px; max-width: 86%; box-shadow: 0 10px 28px -18px rgba(27,19,60,.35); }
 .bot .bub.err { background: color-mix(in srgb, #ea580c 14%, var(--card)); border-color: color-mix(in srgb, #ea580c 35%, var(--card)); }
-@keyframes in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-.typing { display: flex; gap: 5px; padding: 16px 18px; }
-.typing i { display: block; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); opacity: .3; animation: dot 1.2s infinite; }
-.typing i:nth-child(2) { animation-delay: .15s; }
-.typing i:nth-child(3) { animation-delay: .3s; }
-@keyframes dot { 40% { opacity: 1; transform: translateY(-3px); } }
+@keyframes rise { from { opacity: 0; transform: translateY(10px) scale(.98); } to { opacity: 1; transform: none; } }
 
-/* voice bubble */
+/* skeleton bubble shown while Axon is replying (replaces the three dots) */
+.skel { min-width: 230px; display: flex; flex-direction: column; gap: 9px; padding: 16px 18px; }
+.skel span { display: block; height: 10px; border-radius: 999px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--ink) 8%, transparent) 25%,
+    color-mix(in srgb, var(--accent) 32%, transparent) 50%, color-mix(in srgb, var(--ink) 8%, transparent) 75%);
+  background-size: 300% 100%; animation: shimmer 1.4s linear infinite; }
+.skel .l1 { width: 92%; }
+.skel .l2 { width: 74%; }
+.skel .l3 { width: 46%; }
+@keyframes shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+
+/* voice bubble (sent voice messages) */
 .voice { display: flex; align-items: center; gap: 10px; min-width: 190px; }
-.play { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; background: rgba(255,255,255,.2); color: #FFFFFF; flex: none; }
+.mic-dot { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center;
+  background: rgba(255,255,255,.2); color: #FFFFFF; flex: none; }
 .wave { display: flex; align-items: center; gap: 2px; height: 22px; flex: 1; }
-.wave span { width: 3px; border-radius: 9px; background: rgba(255,255,255,.55); }
-.dur { font-size: 12px; opacity: .75; }
-.cap { display: block; margin-top: 8px; font-size: 13px; opacity: .8; white-space: pre-wrap; }
+.wave span { width: 3px; border-radius: 9px; background: rgba(255,255,255,.6); }
+.dur { font-size: 12px; opacity: .8; }
+.cap { display: block; margin-top: 8px; font-size: 13px; opacity: .85; white-space: pre-wrap; }
 
 /* empty state: breathing orb */
-.empty { text-align: center; max-width: 500px; margin: 28px auto 12px; }
+.empty { text-align: center; max-width: 520px; margin: 9vh auto 0; }
 .orb { width: 120px; height: 120px; margin: 0 auto 28px; border-radius: 50%;
   background: radial-gradient(circle at 35% 30%, #fff 0, var(--orb1) 38%, var(--orb2) 100%);
   box-shadow: 0 20px 60px -10px color-mix(in srgb, var(--accent) 50%, transparent);
   animation: breathe 8s ease-in-out infinite; }
 @keyframes breathe { 0%, 100% { transform: scale(.88); } 50% { transform: scale(1.06); } }
-.empty h2 { font-size: 34px !important; line-height: 1.15; margin-bottom: 10px !important; }
-.empty p { color: var(--ink2); margin-bottom: 24px; }
-.empty p.mood-note { font-size: 12px; color: var(--ink3); margin: 12px 0 0; }
+.empty h2 { font-size: 34px !important; line-height: 1.15; margin-bottom: 12px !important; }
+.empty p { color: var(--ink2); font-size: 15px; }
 
 /* header title */
 .title { font-family: 'Fraunces', Georgia, serif; font-size: 17px; color: var(--ink);
@@ -283,6 +289,16 @@ div[data-testid="stHorizontalBlock"]:hover [class*="st-key-del-"] button { opaci
 /* sign-in text */
 .gate-h { text-align: center; font-size: 30px !important; margin: 10px 0 6px !important; }
 .gate-p { text-align: center; color: var(--ink2); font-size: 14px; margin-bottom: 18px; }
+
+/* phones */
+@media (max-width: 640px) {
+  .block-container { padding: .8rem .7rem .6rem; }
+  .bub { max-width: 90%; }
+  .empty { margin-top: 6vh; }
+  .empty h2 { font-size: 28px !important; }
+  .orb { width: 96px; height: 96px; margin-bottom: 22px; }
+  .st-key-composer-bar { padding-top: 12px; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
@@ -614,22 +630,20 @@ def generate_reply(user_message, history, mood, kb):
     return fallback + (SUPPORT_NUDGE if needs_nudge else "")
 
 
-def transcribe_audio(audio_bytes):
-    model = load_transcriber()
-    with tempfile.TemporaryDirectory() as temp_dir:
-        audio_path = Path(temp_dir) / "recording.wav"
-        audio_path.write_bytes(audio_bytes)
-        with get_compute_lock():
-            segments, _ = model.transcribe(str(audio_path), beam_size=1, vad_filter=True)
-            return " ".join(s.text.strip() for s in segments).strip()
-
-
-def wav_seconds(data):
+def transcribe_audio(audio_bytes, mime="audio/webm"):
+    """Turn a recording into text. Returns '' if it can't be understood."""
     try:
-        with wave.open(io.BytesIO(data)) as w:
-            return round(w.getnframes() / float(w.getframerate()))
+        model = load_transcriber()
+        suffix = AUDIO_SUFFIX.get((mime or "").split(";")[0].strip().lower(), ".webm")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            audio_path = Path(temp_dir) / f"recording{suffix}"
+            audio_path.write_bytes(audio_bytes)
+            with get_compute_lock():
+                segments, _ = model.transcribe(str(audio_path), beam_size=1, vad_filter=True)
+                return " ".join(s.text.strip() for s in segments).strip()
     except Exception:
-        return 0
+        logger.exception("Transcription failed")
+        return ""
 
 
 # -----------------------
@@ -644,9 +658,13 @@ def fmt_time(secs):
     return f"{secs // 60}:{secs % 60:02d}"
 
 
-def bubble(text, who, cls=""):
+def bot_bubble_html(text):
+    return f'<div class="row bot"><div class="bub">{esc(text)}</div></div>'
+
+
+def bubble(text, who):
     st.markdown(
-        f'<div class="row {who}"><div class="bub {cls}">{esc(text)}</div></div>',
+        f'<div class="row {who}"><div class="bub">{esc(text)}</div></div>',
         unsafe_allow_html=True,
     )
 
@@ -656,39 +674,35 @@ def voice_bubble(transcript, secs):
     cap = f'<span class="cap">{esc(transcript)}</span>' if transcript else ""
     st.markdown(
         f'<div class="row user"><div class="bub"><div class="voice">'
-        f'<span class="play">{PLAY_SVG}</span><div class="wave">{bars}</div>'
+        f'<span class="mic-dot">{MIC_SVG}</span><div class="wave">{bars}</div>'
         f'<span class="dur">{fmt_time(secs)}</span></div>{cap}</div></div>',
         unsafe_allow_html=True,
     )
 
 
+MIC_SVG = (
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+    'stroke-width="2.2" stroke-linecap="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>'
+    '<path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4"/></svg>'
+)
+
+
+def reveal_reply(reply, slot):
+    """Show the reply word by word, like someone typing it out."""
+    words = reply.split(" ")
+    step = 2
+    delay = min(0.07, 2.2 / max(1, len(words) / step))
+    for end in range(step, len(words) + step, step):
+        slot.markdown(bot_bubble_html(" ".join(words[:end])), unsafe_allow_html=True)
+        time.sleep(delay)
+
+
 def render_empty_state():
-    v = st.session_state.ui_v
     st.markdown(
         '<div class="empty"><div class="orb"></div>'
         '<h2 class="serif">Hi, I\'m Axon. I\'m glad you\'re here.</h2>'
-        "<p>This is a space to say what's on your mind, at your own pace. "
-        "You can type, use the mic, or start with a quick check-in below. "
-        "There's no wrong way to begin.</p></div>",
+        "<p>This is a space to say what's on your mind, at your own pace.</p></div>",
         unsafe_allow_html=True,
-    )
-    st.pills(
-        "Optional: how would you describe today?",
-        list(MOOD_CHOICES),
-        selection_mode="single",
-        key=f"mood_pick_{v}",
-        on_change=on_mood_pick,
-    )
-    st.caption(
-        "This is just your own quick take, not a diagnosis or a precise measurement. "
-        "Feel free to skip it."
-    )
-    st.pills(
-        "Or start with something like:",
-        STARTERS,
-        selection_mode="single",
-        key=f"starter_pick_{v}",
-        on_change=on_starter_pick,
     )
 
 
@@ -706,9 +720,10 @@ def render_checkin():
             selection_mode="single",
             key=f"ci_mood_{v}",
         )
-        st.segmented_control(
-            "How heavy does it feel? 1 = light, 5 = very heavy",
+        st.pills(
+            "How heavy does it feel? (1 = light, 5 = very heavy)",
             ["1", "2", "3", "4", "5"],
+            selection_mode="single",
             key=f"ci_heavy_{v}",
         )
         st.pills(
@@ -731,17 +746,15 @@ def queue_message(text, mood=None, voice=None):
     st.session_state.pending = (text, mood, voice)
 
 
-def on_mood_pick():
-    label = st.session_state.get(f"mood_pick_{st.session_state.ui_v}")
-    if label:
-        key = MOOD_CHOICES[label]
-        queue_message(f"I'm feeling {key} today.", key)
-
-
-def on_starter_pick():
-    text = st.session_state.get(f"starter_pick_{st.session_state.ui_v}")
-    if text:
-        queue_message(text)
+def read_incoming(value):
+    """The composer returns the same value on every rerun. Act on each message once."""
+    if not isinstance(value, dict):
+        return None
+    message_id = value.get("id")
+    if not message_id or message_id == st.session_state.get("last_composer_id"):
+        return None
+    st.session_state.last_composer_id = message_id
+    return value
 
 
 def show_checkin():
@@ -863,10 +876,14 @@ user_id = st.user.sub
 kb = load_knowledge_base()
 chat_id = ensure_active_chat(user_id)
 
-# Header: title, avatar, account menu
+# Header: title, quick check-in, avatar, account menu
 first_name = (st.user.get("name") or "You").split(" ")[0]
-head_title, head_avatar, head_account = st.columns([7, 1, 2], vertical_alignment="center")
+head_title, head_checkin, head_avatar, head_account = st.columns(
+    [6, 2, 1, 2], vertical_alignment="center"
+)
 title_slot = head_title.empty()
+with head_checkin:
+    st.button("Quick check-in", on_click=show_checkin, use_container_width=True)
 with head_avatar:
     if st.user.get("picture"):
         st.image(st.user.get("picture"), width=32)
@@ -892,47 +909,44 @@ with head_account:
 
 st.divider()
 
-# Slots, created in display order and filled below
+# Slots, created in display order. The composer sits at the bottom and is read first.
 history_slot = st.container()
 checkin_slot = st.container()
-tools_slot = st.container()
+composer_slot = st.container(key="composer-bar")
 
-# Read the composer: voice first, then typed text
 pending = st.session_state.pop("pending", None)
 notice = None
-audio = None
 
-with tools_slot:
-    tool_col, check_col, _ = st.columns([2, 2, 4])
-    with tool_col:
-        with st.popover("🎙️ Voice message"):
-            audio = st.audio_input("Record, then stop to send", key="voice_in")
-    check_col.button("Quick check-in", on_click=show_checkin, use_container_width=True)
-    st.caption("Axon offers support, not diagnosis or emergency care.")
+with composer_slot:
+    composer_value = _composer(
+        theme=THEMES[st.session_state.theme],
+        placeholder="Write what's on your mind",
+        key="composer-input",
+        default=None,
+    )
 
-if audio is not None:
-    audio_bytes = audio.getvalue()
-    digest = hashlib.sha256(audio_bytes).hexdigest()
-    # Streamlit reruns on every interaction, so transcribe each recording only once.
-    if digest != st.session_state.get("last_audio_digest"):
-        st.session_state.last_audio_digest = digest
-        if not audio_bytes:
+incoming = read_incoming(composer_value)
+if incoming:
+    if incoming.get("kind") == "text":
+        typed_text = (incoming.get("text") or "").strip()
+        if typed_text:
+            pending = (typed_text, None, None)
+    elif incoming.get("kind") == "audio":
+        try:
+            raw_audio = base64.b64decode(incoming.get("audio") or "")
+        except Exception:
+            raw_audio = b""
+        if not raw_audio:
             notice = "The recording was empty. Please try again."
-        elif len(audio_bytes) > MAX_AUDIO_BYTES:
+        elif len(raw_audio) > MAX_AUDIO_BYTES:
             notice = "That voice message is too long. Please keep it under a minute."
         else:
-            with st.spinner("Listening..."):
-                transcript = transcribe_audio(audio_bytes)
-            if transcript:
-                pending = (transcript, None, (audio_bytes, wav_seconds(audio_bytes)))
-            else:
-                notice = "I couldn't make out that recording. Try again, or type your message instead."
+            pending = (None, None, (
+                raw_audio,
+                int(incoming.get("secs") or 0),
+                incoming.get("mime") or "audio/webm",
+            ))
 
-typed = st.chat_input("Write what's on your mind")
-if typed and typed.strip() and pending is None:
-    pending = (typed.strip(), None, None)
-
-# History, then the new message
 chat = load_chat(user_id, chat_id)
 
 with history_slot:
@@ -948,16 +962,24 @@ with history_slot:
     if pending:
         text, mood, voice = pending
         if voice:
-            voice_bubble(text, voice[1])
-            st.audio(voice[0], format="audio/wav")
+            audio_bytes, secs, mime = voice
+            with st.spinner("Listening..."):
+                text = transcribe_audio(audio_bytes, mime)
+            if text:
+                voice_bubble(text, secs)
+                _, audio_col = st.columns([2, 3])
+                audio_col.audio(audio_bytes, format=mime)
+            else:
+                st.warning("I couldn't make out that recording. Try again, or type your message instead.")
+                pending = None
         else:
             bubble(text, "user")
 
-        typing_ph = st.empty()
-        typing_ph.markdown(TYPING_HTML, unsafe_allow_html=True)
+    if pending:
+        reply_slot = st.empty()
+        reply_slot.markdown(SKELETON_HTML, unsafe_allow_html=True)
         reply = generate_reply(text, recent_messages(user_id, chat_id), mood, kb)
-        typing_ph.empty()
-        bubble(reply, "bot")
+        reveal_reply(reply, reply_slot)
 
         try:
             save_exchange(user_id, chat_id, text, reply)
